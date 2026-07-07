@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - MONGODB_URI=mongodb://mongo:27017/novamind
+      - JWT_SECRET=super_secret_jwt_sign_key_change_in_production
+      - JWT_EXPIRES_IN=7d
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - CHROMADB_URL=http://chromadb:8000
+      - NODE_ENV=production
+    depends_on:
+      - mongo
+      - chromadb
+
+  mongo:
+    image: mongo:6.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadb_data:/chroma/data
+
+volumes:
+  mongo_data:
+  chromadb_data:
