@@ -1,20 +1,27 @@
 import { Router } from 'express';
-import { authRouter } from '../modules/auth/auth.routes';
-import { userRouter } from '../modules/users/user.routes';
-import { chatRouter } from '../modules/chat/chat.routes';
-import { conversationRouter } from '../modules/conversation/conversation.routes';
-import { documentRouter } from '../modules/documents/document.routes';
-import { adminRouter } from '../modules/admin/admin.routes';
-import { dashboardRouter } from '../modules/dashboard/dashboard.routes';
+import { authRouter } from './auth.routes';
+import { userRouter } from './user.routes';
+import { chatRouter } from './chat.routes';
+import { conversationRouter } from './conversation.routes';
+import { documentRouter } from './document.routes';
+import { adminRouter } from './admin.routes';
+import { dashboardRouter } from './dashboard.routes';
+import { systemRouter } from './system.routes';
 
 const router = Router();
 
-router.use('/auth', authRouter);
-router.use('/users', userRouter);
-router.use('/chats', chatRouter);
-router.use('/conversations', conversationRouter);
-router.use('/documents', documentRouter);
-router.use('/admin', adminRouter);
-router.use('/dashboard', dashboardRouter);
+// Version 1 router group
+const v1Router = Router();
+
+v1Router.use('/', systemRouter);
+v1Router.use('/auth', authRouter);
+v1Router.use('/users', userRouter);
+v1Router.use('/chats', chatRouter);
+v1Router.use('/conversations', conversationRouter);
+v1Router.use('/documents', documentRouter);
+v1Router.use('/admin', adminRouter);
+v1Router.use('/dashboard', dashboardRouter);
+
+router.use('/v1', v1Router);
 
 export default router;

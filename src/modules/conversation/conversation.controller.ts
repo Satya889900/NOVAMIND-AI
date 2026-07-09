@@ -13,8 +13,24 @@ export const createRoom = asyncHandler(async (req: Request, res: Response) => {
   const room = await conversationService.createRoom(
     name,
     isGroup,
-    participantIds,
+    participantIds || [],
     req.user.id
   );
-  return sendSuccess(res, 'Conversation created successfully', room, 21);
+  return sendSuccess(res, 'Conversation created successfully', room, 201);
+});
+
+export const getRoomById = asyncHandler(async (req: Request, res: Response) => {
+  const room = await conversationService.getRoomById(req.params.id, req.user.id);
+  return sendSuccess(res, 'Conversation retrieved successfully', room);
+});
+
+export const renameRoom = asyncHandler(async (req: Request, res: Response) => {
+  const { name } = req.body;
+  const room = await conversationService.renameRoom(req.params.id, name, req.user.id);
+  return sendSuccess(res, 'Conversation renamed successfully', room);
+});
+
+export const deleteRoom = asyncHandler(async (req: Request, res: Response) => {
+  const result = await conversationService.deleteRoom(req.params.id, req.user.id);
+  return sendSuccess(res, 'Conversation deleted successfully', result);
 });

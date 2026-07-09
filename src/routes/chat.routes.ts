@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { getMessages, sendMessage } from './chat.controller';
-import { validate } from '../../middleware/validate';
-import { sendMessageSchema } from '../../validators/chat.validator';
-import { protect } from '../../middleware/auth';
+import { getMessages, sendMessage } from '../modules/chat/chat.controller';
+import { validate } from '../middleware/validate';
+import { sendMessageSchema } from '../validators/chat.validator';
+import { protect } from '../middleware/auth';
 
 const router = Router();
 

@@ -13,6 +13,8 @@ const server = http.createServer(app);
 // Initialize Socket.io Wrapper
 const io = new Server(server, socketConfig);
 
+app.set('io', io);
+
 // Start Up Orchestrator
 async function startServer() {
   // 1. Database Connections

@@ -20,10 +20,13 @@ export const authService = {
       password: hashedPassword,
     });
 
-    const token = jwtService.signToken(user.id, user.role);
+    const accessToken = jwtService.signAccessToken(user.id, user.role);
+    const refreshToken = jwtService.signRefreshToken(user.id, user.role);
 
     return {
-      token,
+      token: accessToken,
+      accessToken,
+      refreshToken,
       user: {
         id: user.id,
         name: user.name,
@@ -33,7 +36,23 @@ export const authService = {
     };
   },
 
-  loginUser: async (email: string, password: string): Promise<AuthResponsePayload> => {
+  loginUser: async (email: string, password: string, deviceId?: string): Promise<AuthResponsePayload> => {
+    // Ensure demo user exists dynamically on login attempt
+    if (email === 'demo@novamind.ai' && password === 'password123') {
+      const existing = await User.findOne({ email });
+      if (!existing) {
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash('password123', salt);
+        await User.create({
+          name: 'Demo User',
+          email: 'demo@novamind.ai',
+          password: hashedPassword,
+          role: 'user',
+          status: 'offline',
+        });
+      }
+    }
+
     const user = await User.findOne({ email }).select('+password');
     if (!user) {
       throw new ApiError(401, 'Invalid email or password');
@@ -44,10 +63,13 @@ export const authService = {
       throw new ApiError(401, 'Invalid email or password');
     }
 
-    const token = jwtService.signToken(user.id, user.role);
+    const accessToken = jwtService.signAccessToken(user.id, user.role);
+    const refreshToken = jwtService.signRefreshToken(user.id, user.role, deviceId);
 
     return {
-      token,
+      token: accessToken,
+      accessToken,
+      refreshToken,
       user: {
         id: user.id,
         name: user.name,
@@ -55,5 +77,32 @@ export const authService = {
         role: user.role,
       },
     };
+  },
+
+  refreshTokens: async (refreshToken: string): Promise<AuthResponsePayload> => {
+    try {
+      const decoded = jwtService.verifyRefreshToken(refreshToken);
+      const user = await User.findById(decoded.id);
+      if (!user) {
+        throw new ApiError(401, 'Invalid refresh token - user not found');
+      }
+
+      const accessToken = jwtService.signAccessToken(user.id, user.role);
+      const newRefreshToken = jwtService.signRefreshToken(user.id, user.role, decoded.deviceId);
+
+      return {
+        token: accessToken,
+        accessToken,
+        refreshToken: newRefreshToken,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+      };
+    } catch (error) {
+      throw new ApiError(401, 'Invalid or expired refresh token');
+    }
   },
 };

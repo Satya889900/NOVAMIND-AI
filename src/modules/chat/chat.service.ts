@@ -1,6 +1,7 @@
 import { Message } from '../../models/Message';
 import { Conversation } from '../../models/Conversation';
 import { ApiError } from '../../utils/ApiError';
+import { generateConversationTitle } from '../../utils/generateTitle';
 
 export const chatService = {
   getMessagesByRoom: async (roomId: string) => {
@@ -30,6 +31,13 @@ export const chatService = {
       fileUrl,
       fileName,
     });
+
+    // Automatically name the conversation based on the first message
+    if (!conversation.lastMessage) {
+      if (!conversation.name || conversation.name === 'New Chat') {
+        conversation.name = generateConversationTitle(content || type);
+      }
+    }
 
     conversation.lastMessage = message.id as any;
     await conversation.save();
