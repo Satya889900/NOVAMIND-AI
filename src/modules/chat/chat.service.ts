@@ -3,6 +3,8 @@ import { Conversation } from '../../models/Conversation';
 import { ApiError } from '../../utils/ApiError';
 import { generateConversationTitle } from '../../utils/generateTitle';
 
+import { aiService } from '../ai/ai.service';
+
 export const chatService = {
   getMessagesByRoom: async (roomId: string) => {
     return await Message.find({ conversationId: roomId })
@@ -32,10 +34,11 @@ export const chatService = {
       fileName,
     });
 
-    // Automatically name the conversation based on the first message
+    // Automatically name the conversation intelligently based on the first message
     if (!conversation.lastMessage) {
       if (!conversation.name || conversation.name === 'New Chat') {
-        conversation.name = generateConversationTitle(content || type);
+        const generatedTitle = await aiService.generateTitle(content || type);
+        conversation.name = generatedTitle;
       }
     }
 

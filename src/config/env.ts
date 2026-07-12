@@ -11,6 +11,7 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().default('super_secret_refresh_sign_key_change_in_production'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
   GEMINI_API_KEY: z.string().optional(),
+  GEMINI_BOT_ID: z.string().optional(),
   CHROMADB_URL: z.string().default('http://localhost:8000'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
 });

@@ -1,18 +1,21 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from './env';
 import { logger } from './logger';
 
-let aiClient: GoogleGenAI | null = null;
+let aiClient: GoogleGenerativeAI | null = null;
 
 if (env.GEMINI_API_KEY) {
   try {
-    aiClient = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
+    aiClient = new GoogleGenerativeAI(env.GEMINI_API_KEY);
     logger.info('Google GenAI Client initialized successfully');
   } catch (error: any) {
     logger.error(`Error initializing Gemini AI: ${error.message}`);
   }
 } else {
-  logger.warn('GEMINI_API_KEY environment variable is not defined');
+  logger.warn('GEMINI_API_KEY environment variable is not defined. AI features will be disabled.');
 }
 
-export { aiClient };
+const geminiModel = aiClient?.getGenerativeModel({ model: 'gemini-3.5-flash' });
+const embeddingModel = aiClient?.getGenerativeModel({ model: 'text-embedding-004' });
+
+export { aiClient, geminiModel, embeddingModel };

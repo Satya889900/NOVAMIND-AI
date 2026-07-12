@@ -7,6 +7,7 @@ import { documentRouter } from './document.routes';
 import { adminRouter } from './admin.routes';
 import { dashboardRouter } from './dashboard.routes';
 import { systemRouter } from './system.routes';
+import { aiRouter } from './ai.routes';
 
 const router = Router();
 
@@ -21,6 +22,7 @@ v1Router.use('/conversations', conversationRouter);
 v1Router.use('/documents', documentRouter);
 v1Router.use('/admin', adminRouter);
 v1Router.use('/dashboard', dashboardRouter);
+v1Router.use('/ai', aiRouter);
 
 router.use('/v1', v1Router);
 

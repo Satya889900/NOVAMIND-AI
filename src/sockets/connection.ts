@@ -3,6 +3,7 @@ import { handleChatSocket } from './chat.socket';
 import { logger } from '../config/logger';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env';
+import { User } from '../models/User';
 
 export const handleConnection = (io: Server, socket: Socket) => {
   const token = socket.handshake.auth.token;
@@ -18,18 +19,25 @@ export const handleConnection = (io: Server, socket: Socket) => {
     (socket as any).userId = decoded.id;
     logger.info(`Socket client connected: ${socket.id} (user: ${decoded.id})`);
 
-    // Emit online status change
-    io.emit('user_status_changed', { userId: decoded.id, status: 'online' });
+    // Asynchronously fetch user to attach to socket
+    User.findById(decoded.id).select('name').then(user => {
+      if (user) {
+        (socket as any).user = user;
+      }
 
-    // Join user's individual room
-    socket.join(decoded.id);
+      // Emit online status change
+      io.emit('user_status_changed', { userId: decoded.id, status: 'online' });
 
-    // Register handlers
-    handleChatSocket(io, socket);
+      // Join user's individual room
+      socket.join(decoded.id);
 
-    socket.on('disconnect', () => {
-      logger.info(`Socket client disconnected: ${socket.id}`);
-      io.emit('user_status_changed', { userId: decoded.id, status: 'offline' });
+      // Register handlers
+      handleChatSocket(io, socket);
+
+      socket.on('disconnect', () => {
+        logger.info(`Socket client disconnected: ${socket.id}`);
+        io.emit('user_status_changed', { userId: decoded.id, status: 'offline' });
+      });
     });
   } catch (error) {
     logger.error(`Socket authorization verification failed: ${socket.id}`);
