@@ -1,8 +1,5 @@
 import { Server, Socket } from 'socket.io';
 import { logger } from '../config/logger';
-import { chatService } from '../modules/chat/chat.service';
-import { aiService } from '../modules/ai/ai.service';
-import { env } from '../config/env';
 
 export const handleChatSocket = (io: Server, socket: Socket) => {
   const user = (socket as any).user as any;
@@ -28,60 +25,41 @@ export const handleChatSocket = (io: Server, socket: Socket) => {
   });
 
   /**
-   * Handle incoming messages and auto-reply with AI
+   * NOTE: 'send_message' from the frontend is just a real-time notification
+   * to other users in the room. The actual message SAVING and AI REPLY
+   * is handled by the REST API (POST /api/v1/chats/:roomId/messages).
+   * 
+   * The frontend calls BOTH:
+   *   1. socket.emit('send_message', ...) — broadcasts to other users instantly
+   *   2. POST /api/v1/chats/:roomId/messages — saves to DB + gets AI reply
+   * 
+   * So this socket handler does NOT save to DB or call AI — just re-broadcasts.
    */
-  socket.on('send_message', async (data: { roomId: string; message: string }) => {
-    try {
-      const { roomId, message: content } = data;
+  socket.on('send_message', (data: { roomId: string; content: string; type?: string }) => {
+    const { roomId, content, type } = data;
 
-      // 1. Save user message
-      const userMessage = await chatService.createMessage(
-        roomId,
-        userId,
-        content,
-        'text'
-      );
-
-      // Emit user message to all in room
-      io.to(roomId).emit('new_message', {
-        roomId,
-        message: userMessage,
-      });
-
-      // 2. Generate AI response if GEMINI_BOT_ID is configured
-      if (env.GEMINI_BOT_ID) {
-        try {
-          const aiResponse = await aiService.generateChatResponse(roomId, content);
-
-          // 3. Save AI message
-          const aiMessage = await chatService.createMessage(
-            roomId,
-            env.GEMINI_BOT_ID,
-            aiResponse,
-            'text'
-          );
-
-          // Emit AI response to all in room
-          io.to(roomId).emit('new_message', {
-            roomId,
-            message: aiMessage,
-          });
-
-          logger.info(`Auto-reply sent in room ${roomId}`);
-        } catch (aiError: any) {
-          logger.error(`Error generating AI response: ${aiError.message}`);
-          // Emit error event but don't crash
-          socket.emit('ai_error', {
-            roomId,
-            error: 'Failed to generate AI response',
-          });
-        }
-      }
-    } catch (error: any) {
-      logger.error(`Socket message error: ${error.message}`);
-      socket.emit('message_error', {
-        error: error.message || 'Failed to send message',
-      });
+    if (!content || !content.trim()) {
+      logger.warn(`Empty socket message ignored from user ${userId}`);
+      return;
     }
+
+    // Broadcast to OTHER users in the room (not back to sender)
+    socket.to(roomId).emit('message_received', {
+      _id: `temp-${Date.now()}`,
+      conversationId: roomId,
+      roomId,
+      senderId: {
+        _id: userId,
+        id: userId,
+        name: user.name,
+        email: user.email,
+        avatarUrl: user.avatarUrl || '',
+        status: 'online',
+      },
+      content,
+      type: type || 'text',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
   });
 };

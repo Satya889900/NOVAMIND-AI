@@ -1,4 +1,5 @@
-import { geminiModel } from '../../config/gemini';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import { aiClient, MODEL_FALLBACK_ORDER } from '../../config/gemini';
 import { logger } from '../../config/logger';
 import { Message } from '../../models/Message';
 import { User } from '../../models/User';
@@ -6,73 +7,124 @@ import { Conversation } from '../../models/Conversation';
 import { ApiError } from '../../utils/ApiError';
 import { env } from '../../config/env';
 
-const SYSTEM_INSTRUCTION = `You are NovaMind AI — a helpful, friendly, and intelligent AI assistant built into a real-time chat application called NovaMind.
+const SYSTEM_INSTRUCTION = `You are NovaMind AI — a helpful, friendly, and intelligent AI assistant.
 
 Key behaviors:
-- Respond naturally and conversationally, like a knowledgeable friend.
-- Give clear, concise, and helpful answers.
-- Use markdown formatting when it helps readability (code blocks, lists, bold, etc.).
-- If asked to write code, always wrap it in proper fenced code blocks with the language specified.
+- Respond naturally and conversationally like a knowledgeable friend.
+- Give clear, well-structured, and helpful answers.
+- Use markdown formatting: bold for emphasis, bullet lists for points, numbered lists for steps, code blocks for code.
+- If asked to write code, always use fenced code blocks with the language name (e.g. \`\`\`python).
 - Be warm, supportive, and professional.
-- If you don't know something, say so honestly rather than making things up.
+- If you don't know something, say so honestly.
 - Keep responses focused and avoid unnecessary filler text.`;
+
+/**
+ * Try generating content with model fallback.
+ * If the primary model fails with 503/429/404, try the next model in the list.
+ */
+async function generateWithFallback(
+  prompt: string,
+  history: { role: string; parts: { text: string }[] }[] = []
+): Promise<string> {
+  if (!aiClient) throw new ApiError(503, 'AI client is not initialized. Check GEMINI_API_KEY in .env');
+
+  const errors: string[] = [];
+
+  for (const modelName of MODEL_FALLBACK_ORDER) {
+    try {
+      const model = (aiClient as GoogleGenerativeAI).getGenerativeModel({ model: modelName });
+
+      let text: string;
+
+      if (history.length > 0) {
+        // Multi-turn chat with history
+        const chat = model.startChat({
+          history,
+          generationConfig: { maxOutputTokens: 2048, temperature: 0.8 },
+        });
+        const result = await chat.sendMessage(prompt);
+        text = result.response.text();
+      } else {
+        // Single-turn generation
+        const result = await model.generateContent(prompt);
+        text = result.response.text();
+      }
+
+      if (text && text.trim()) {
+        if (modelName !== MODEL_FALLBACK_ORDER[0]) {
+          logger.info(`AI responded using fallback model: ${modelName}`);
+        }
+        return text;
+      }
+    } catch (err: any) {
+      const msg = err.message || String(err);
+      errors.push(`[${modelName}]: ${msg}`);
+      logger.warn(`Model ${modelName} failed: ${msg}`);
+
+      // Only continue to fallback for retriable errors (503, 429, 404)
+      const isRetriable = msg.includes('503') || msg.includes('429') || msg.includes('404') || msg.includes('not found') || msg.includes('high demand') || msg.includes('quota');
+      if (!isRetriable) break;
+    }
+  }
+
+  throw new Error(`All models failed:\n${errors.join('\n')}`);
+}
 
 export const aiService = {
   /**
-   * Generates a response from Gemini based on conversation history.
-   * @param conversationId The ID of the conversation.
-   * @param userMessage The new message from the user.
-   * @returns The generated content from the AI.
+   * Generates an AI response using conversation history for context.
    */
   generateChatResponse: async (conversationId: string, userMessage: string): Promise<string> => {
-    if (!geminiModel) {
+    if (!aiClient) {
       throw new ApiError(503, 'AI Service is not available. Please configure GEMINI_API_KEY in .env');
     }
 
-    const botId = env.GEMINI_BOT_ID;
+    const botUserId = env.GEMINI_BOT_ID
+      ? env.GEMINI_BOT_ID
+      : (await User.findOne({ email: 'novamind-ai@novamind.ai' }))?._id?.toString();
 
-    // Load last 20 messages for context
-    const messages = await Message.find({ conversationId })
+    // Load last 40 messages for conversation context
+    const allMessages = await Message.find({ conversationId })
       .sort({ createdAt: 'asc' })
-      .limit(20);
+      .limit(40);
 
-    // Build chat history for Gemini (exclude the current user message — it will be sent separately)
-    const history = messages
+    // CRITICAL: Exclude the last saved message (the current user msg) from history
+    // since we send it separately. Prevents duplicate consecutive 'user' turns.
+    const historyMessages = allMessages.slice(0, -1);
+
+    // Build valid Gemini history with alternating roles
+    const rawHistory = historyMessages
       .filter((msg) => msg.content && msg.content.trim() !== '')
       .map((msg) => ({
-        role: botId && msg.senderId.toString() === botId ? 'model' : 'user',
+        role: botUserId && msg.senderId.toString() === botUserId ? 'model' : 'user',
         parts: [{ text: msg.content }],
       }));
 
-    try {
-      const chat = geminiModel.startChat({
-        history,
-        generationConfig: {
-          maxOutputTokens: 2048,
-          temperature: 0.8,
-          topP: 0.95,
-        },
-      });
-
-      const result = await chat.sendMessage(SYSTEM_INSTRUCTION + '\n\nUser: ' + userMessage);
-      const response = result.response;
-      const text = response.text();
-
-      if (!text || text.trim() === '') {
-        return 'I apologize, but I was unable to generate a response. Please try again.';
+    // Merge consecutive same-role turns (Gemini requires strict alternation)
+    const history: { role: string; parts: { text: string }[] }[] = [];
+    for (const entry of rawHistory) {
+      if (history.length === 0 || history[history.length - 1].role !== entry.role) {
+        history.push({ ...entry });
+      } else {
+        history[history.length - 1].parts[0].text += '\n' + entry.parts[0].text;
       }
+    }
 
-      return text;
+    // Prepend system instruction to the first message if no history yet
+    const messageToSend = history.length === 0
+      ? `${SYSTEM_INSTRUCTION}\n\n${userMessage}`
+      : userMessage;
+
+    try {
+      return await generateWithFallback(messageToSend, history);
     } catch (error: any) {
-      logger.error(`Error generating Gemini response: ${error.message}`);
-      // Return a friendly fallback instead of throwing — so the user still gets a reply
-      return `I'm sorry, I encountered an error while processing your message. Please try again. (Error: ${error.message})`;
+      logger.error(`All AI models failed for conversation ${conversationId}: ${error.message}`);
+      return `I'm sorry, the AI service is temporarily unavailable. Please try again in a moment.`;
     }
   },
 
   /**
    * Ensure the AI Bot user exists in the database.
-   * Creates one if it doesn't exist. Returns the bot user's _id.
    */
   ensureBotUser: async (): Promise<string> => {
     const botId = env.GEMINI_BOT_ID;
@@ -82,7 +134,6 @@ export const aiService = {
       if (existingBot) return botId;
     }
 
-    // Create or find the bot user by email
     let botUser = await User.findOne({ email: 'novamind-ai@novamind.ai' });
     if (!botUser) {
       botUser = await User.create({
@@ -100,23 +151,17 @@ export const aiService = {
   },
 
   /**
-   * Generates a smart, concise title for a new conversation based on the first message.
+   * Generates a smart short title for a new conversation.
    */
   generateTitle: async (firstMessage: string): Promise<string> => {
-    if (!geminiModel) return firstMessage.substring(0, 20) + '...';
+    if (!aiClient) return firstMessage.substring(0, 25);
 
     try {
-      const prompt = `Generate a very short, concise title (maximum 4 words) for a chat conversation that starts with this message. Do not use quotes.\n\n"${firstMessage}"\n\nTitle:`;
-      const result = await geminiModel.generateContent(prompt);
-      let title = result.response.text().trim();
-      
-      // Remove any surrounding quotes if the AI included them
-      title = title.replace(/^["'](.*)["']$/, '$1');
-      
-      return title || 'New Chat';
-    } catch (error) {
-      // Fallback if AI generation fails
-      return firstMessage.substring(0, 20) + '...';
+      const prompt = `Generate a very short chat title (3-5 words max) summarizing this message. No quotes, no punctuation at end.\n\nMessage: "${firstMessage}"\n\nTitle:`;
+      const title = await generateWithFallback(prompt);
+      return title.trim().replace(/^["'](.*)["']$/, '$1') || firstMessage.substring(0, 25);
+    } catch {
+      return firstMessage.substring(0, 25);
     }
   },
 };

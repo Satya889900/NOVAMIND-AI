@@ -4,6 +4,7 @@ import { aiService } from '../ai/ai.service';
 import { sendSuccess } from '../../utils/response';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { Conversation } from '../../models/Conversation';
+import { Message } from '../../models/Message';
 import { logger } from '../../config/logger';
 import { geminiModel } from '../../config/gemini';
 
@@ -17,6 +18,10 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
   const roomId = req.params.roomId;
   const userId = req.user.id;
 
+  // Check if this is the FIRST message in the conversation (for title generation)
+  const existingMessageCount = await Message.countDocuments({ conversationId: roomId });
+  const isFirstMessage = existingMessageCount === 0;
+
   // 1. Save the user's message
   const userMessage = await chatService.createMessage(
     roomId,
@@ -27,8 +32,20 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
     fileName
   );
 
-  // 2. Check if this is an AI conversation (bot is a participant)
-  //    If yes, auto-generate a Gemini response
+  // 2. If it's the first message, generate a smart title using AI (fire-and-forget)
+  if (isFirstMessage && geminiModel) {
+    aiService.generateTitle(content).then(async (title) => {
+      const conv = await Conversation.findById(roomId);
+      if (conv && (!conv.name || conv.name === 'New Chat')) {
+        await chatService.renameConversation(roomId, title);
+        logger.info(`AI-generated title for conversation ${roomId}: "${title}"`);
+      }
+    }).catch((err) => {
+      logger.error(`Title generation failed: ${err.message}`);
+    });
+  }
+
+  // 3. Auto-generate Gemini reply (always, for all messages)
   let aiReply = null;
 
   if (geminiModel) {
@@ -37,42 +54,36 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
       const conversation = await Conversation.findById(roomId).lean();
 
       if (conversation) {
-        // Check if the AI bot is a participant in this conversation
-        let botIsParticipant = conversation.participants.some(
+        // Auto-add the AI bot to the conversation if not already there
+        const botIsParticipant = (conversation.participants as any[]).some(
           (p: any) => p.toString() === botUserId
         );
-
-        // Auto-add the AI bot to the conversation if it's not already there
-        // This makes it act exactly like a Gemini global chat
         if (!botIsParticipant) {
           await Conversation.findByIdAndUpdate(roomId, {
-            $addToSet: { participants: botUserId }
+            $addToSet: { participants: botUserId },
           });
-          botIsParticipant = true;
         }
 
-        if (botIsParticipant) {
-          // Generate AI response using Gemini
-          const aiResponseText = await aiService.generateChatResponse(roomId, content);
+        // Generate AI response using Gemini
+        const aiResponseText = await aiService.generateChatResponse(roomId, content);
 
-          // Save the AI response as a message from the bot
-          aiReply = await chatService.createMessage(
-            roomId,
-            botUserId,
-            aiResponseText,
-            'text'
-          );
+        // Save the AI response as a message from the bot
+        aiReply = await chatService.createMessage(
+          roomId,
+          botUserId,
+          aiResponseText,
+          'text'
+        );
 
-          logger.info(`AI auto-replied in conversation ${roomId}`);
-        }
+        logger.info(`AI auto-replied in conversation ${roomId}`);
       }
     } catch (error: any) {
       logger.error(`AI auto-reply failed: ${error.message}`);
-      // Don't fail the entire request — the user's message was already saved
+      // Don't fail the entire request — user's message is already saved
     }
   }
 
-  // 3. Return the user's message (+ AI reply if generated)
+  // 4. Return both the user's message and the AI reply
   const responseData: any = {
     userMessage,
     ...(aiReply ? { aiReply } : {}),

@@ -3,8 +3,6 @@ import { Conversation } from '../../models/Conversation';
 import { ApiError } from '../../utils/ApiError';
 import { generateConversationTitle } from '../../utils/generateTitle';
 
-import { aiService } from '../ai/ai.service';
-
 export const chatService = {
   getMessagesByRoom: async (roomId: string) => {
     return await Message.find({ conversationId: roomId })
@@ -34,17 +32,16 @@ export const chatService = {
       fileName,
     });
 
-    // Automatically name the conversation intelligently based on the first message
-    if (!conversation.lastMessage) {
-      if (!conversation.name || conversation.name === 'New Chat') {
-        const generatedTitle = await aiService.generateTitle(content || type);
-        conversation.name = generatedTitle;
-      }
-    }
-
     conversation.lastMessage = message.id as any;
     await conversation.save();
 
     return await message.populate('senderId', 'name email avatarUrl status');
+  },
+
+  /**
+   * Renames a conversation. Called externally (e.g., from chat.controller after AI title generation).
+   */
+  renameConversation: async (roomId: string, name: string) => {
+    await Conversation.findByIdAndUpdate(roomId, { name });
   },
 };
