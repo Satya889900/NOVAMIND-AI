@@ -102,7 +102,7 @@ Key behaviors:
 - If the user asks you to generate, create, draw, or show an image (e.g., "draw a cute puppy", "generate an image of a sunset"), you MUST respond ONLY with a JSON object in this exact format:
 {
   "action": "generate_image",
-  "prompt": "<detailed, descriptive English prompt for image generation, optimized for DALL-E/Imagen>"
+  "prompt": "<extremely detailed, descriptive English prompt optimized for state-of-the-art FLUX/Imagen diffusion models. Describe the subject, background, layout, cinematic lighting, 3D elements, premium color palette, typography style, and request crystal clear text rendering and professional digital art masterpiece quality>"
 }
 Do not include any other text if you are generating an image.`;
 
