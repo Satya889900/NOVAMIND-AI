@@ -7,6 +7,8 @@ import { Conversation } from '../../models/Conversation';
 import { Message } from '../../models/Message';
 import { logger } from '../../config/logger';
 import { geminiModel } from '../../config/gemini';
+import { ApiError } from '../../utils/ApiError';
+import { uploadToCloudinary } from '../../config/multer';
 
 export const getMessages = asyncHandler(async (req: Request, res: Response) => {
   const messages = await chatService.getMessagesByRoom(req.params.roomId);
@@ -90,4 +92,24 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
   };
 
   return sendSuccess(res, 'Message sent successfully', responseData, 201);
+});
+
+export const uploadChatAttachment = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.parsedFile) {
+    throw new ApiError(400, 'No file uploaded');
+  }
+
+  const { filename, mimetype, buffer, size } = req.parsedFile;
+
+  // 1. Upload to Cloudinary (using 'auto' to auto-detect images/files)
+  const cloudResult = await uploadToCloudinary(buffer, filename, 'novamind/chat');
+
+  // 2. Return URL and public ID
+  return sendSuccess(res, 'File uploaded successfully', {
+    url: cloudResult.secure_url,
+    publicId: cloudResult.public_id,
+    fileName: filename,
+    fileType: mimetype,
+    fileSize: size,
+  });
 });

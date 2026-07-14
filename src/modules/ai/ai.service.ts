@@ -6,6 +6,26 @@ import { User } from '../../models/User';
 import { Conversation } from '../../models/Conversation';
 import { ApiError } from '../../utils/ApiError';
 import { env } from '../../config/env';
+import https from 'https';
+import http from 'http';
+
+function downloadFileToBuffer(url: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https') ? https : http;
+    client.get(url, (res) => {
+      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return downloadFileToBuffer(res.headers.location).then(resolve).catch(reject);
+      }
+      if (res.statusCode && res.statusCode >= 400) {
+        return reject(new Error(`HTTP status code ${res.statusCode}`));
+      }
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    }).on('error', reject);
+  });
+}
 
 const SYSTEM_INSTRUCTION = `You are NovaMind AI — a helpful, friendly, and intelligent AI assistant.
 
@@ -23,7 +43,7 @@ Key behaviors:
  * If the primary model fails with 503/429/404, try the next model in the list.
  */
 async function generateWithFallback(
-  prompt: string,
+  prompt: string | any[],
   history: { role: string; parts: { text: string }[] }[] = []
 ): Promise<string> {
   if (!aiClient) throw new ApiError(503, 'AI client is not initialized. Check GEMINI_API_KEY in .env');
@@ -115,8 +135,39 @@ export const aiService = {
       ? `${SYSTEM_INSTRUCTION}\n\n${userMessage}`
       : userMessage;
 
+    // Check recent history (last 5 messages) for an image attachment
+    let promptParts: any[] = [];
+    const recentMessages = allMessages.slice(-5);
+    const imageMessage = [...recentMessages].reverse().find(m => m.type === 'image' && m.fileUrl);
+
+    if (imageMessage && imageMessage.fileUrl) {
+      try {
+        logger.info(`Downloading image for Gemini prompt: ${imageMessage.fileUrl}`);
+        const imageBuffer = await downloadFileToBuffer(imageMessage.fileUrl);
+        
+        // Determine correct mime type
+        let mimeType = 'image/jpeg';
+        if (imageMessage.fileUrl.endsWith('.png')) mimeType = 'image/png';
+        else if (imageMessage.fileUrl.endsWith('.webp')) mimeType = 'image/webp';
+        else if (imageMessage.fileUrl.endsWith('.gif')) mimeType = 'image/gif';
+
+        promptParts.push({
+          inlineData: {
+            mimeType,
+            data: imageBuffer.toString('base64'),
+          },
+        });
+      } catch (err: any) {
+        logger.error(`Failed to download image for Gemini prompt: ${err.message}`);
+      }
+    }
+
+    // Add the text query part
+    promptParts.push({ text: messageToSend });
+
     try {
-      return await generateWithFallback(messageToSend, history);
+      const finalPrompt = promptParts.length > 1 ? promptParts : messageToSend;
+      return await generateWithFallback(finalPrompt, history);
     } catch (error: any) {
       logger.error(`All AI models failed for conversation ${conversationId}: ${error.message}`);
       return `I'm sorry, the AI service is temporarily unavailable. Please try again in a moment.`;

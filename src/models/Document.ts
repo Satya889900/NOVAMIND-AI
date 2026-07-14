@@ -2,35 +2,46 @@ import { Schema, model, Types } from 'mongoose';
 
 const DocumentSchema = new Schema(
   {
-    name: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    filePath: {
-      type: String,
-      required: true,
-    },
-    mimeType: {
-      type: String,
-      required: true,
-    },
-    sizeBytes: {
-      type: Number,
-      required: true,
-    },
     userId: {
       type: Types.ObjectId,
       ref: 'User',
       required: true,
     },
-    chromaCollectionId: {
-      type: String,
-      default: '',
+    conversationId: {
+      type: Types.ObjectId,
+      ref: 'Conversation',
+      required: false,
     },
-    chunkCount: {
+    fileName: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    originalName: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    fileType: {
+      type: String,
+      required: true,
+    },
+    fileSize: {
       type: Number,
-      default: 0,
+      required: true,
+    },
+    storagePath: {
+      type: String,
+      required: true,
+    },
+    cloudinaryPublicId: {
+      type: String,
+      required: true,
+    },
+    status: {
+      type: String,
+      enum: ['Uploaded', 'Processing', 'Completed', 'Ready', 'Failed'],
+      default: 'Uploaded',
     },
   },
   {

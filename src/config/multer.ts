@@ -1,66 +1,81 @@
-import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
+import { cloudinary } from '../config/cloudinary';
+import { Readable } from 'stream';
+import { logger } from '../config/logger';
 
-// Helper to make sure directories exist
-const createDirIfNotExist = (dirPath: string) => {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
+export interface CloudinaryUploadResult {
+  public_id: string;
+  secure_url: string;
+  bytes: number;
+  format: string;
+  resource_type: string;
+  original_filename: string;
+}
+
+const ALLOWED_MIME_TYPES = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+];
+
+/**
+ * Upload a file buffer to Cloudinary using the auto resource_type
+ * (auto dynamically detects PDFs, docs, txt, and images).
+ */
+export const uploadToCloudinary = (
+  fileBuffer: Buffer,
+  originalName: string,
+  folder = 'novamind/documents'
+): Promise<CloudinaryUploadResult> => {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        resource_type: 'auto',
+        folder,
+        public_id: `${Date.now()}-${originalName.replace(/[^a-zA-Z0-9._-]/g, '_')}`,
+        use_filename: true,
+        unique_filename: true,
+      },
+      (error, result) => {
+        if (error) {
+          logger.error(`Cloudinary upload failed: ${error.message}`);
+          return reject(error);
+        }
+        if (!result) {
+          return reject(new Error('Cloudinary returned no result'));
+        }
+        resolve({
+          public_id: result.public_id,
+          secure_url: result.secure_url,
+          bytes: result.bytes,
+          format: result.format,
+          resource_type: result.resource_type,
+          original_filename: result.original_filename,
+        });
+      }
+    );
+
+    // Pipe the buffer into the upload stream
+    const readable = Readable.from(fileBuffer);
+    readable.pipe(uploadStream);
+  });
+};
+
+/**
+ * Delete a file from Cloudinary by its public_id.
+ */
+export const deleteFromCloudinary = async (publicId: string, resourceType = 'raw'): Promise<void> => {
+  try {
+    await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+    logger.info(`Deleted from Cloudinary: ${publicId} (${resourceType})`);
+  } catch (err: any) {
+    logger.error(`Failed to delete from Cloudinary: ${err.message}`);
   }
 };
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    let uploadPath = 'uploads/';
-    
-    if (file.mimetype === 'application/pdf') {
-      uploadPath = path.join(uploadPath, 'pdf');
-    } else if (
-      file.mimetype === 'application/msword' ||
-      file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-      file.mimetype === 'text/plain'
-    ) {
-      uploadPath = path.join(uploadPath, 'docs');
-    } else if (file.mimetype.startsWith('image/')) {
-      uploadPath = path.join(uploadPath, 'images');
-    }
-
-    createDirIfNotExist(uploadPath);
-    cb(null, uploadPath);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  },
-});
-
-export const fileFilter = (
-  req: any,
-  file: any,
-  cb: multer.FileFilterCallback
-) => {
-  const allowedMimeTypes = [
-    'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'text/plain',
-    'image/jpeg',
-    'image/png',
-    'image/gif',
-    'image/webp',
-  ];
-
-  if (allowedMimeTypes.includes(file.mimetype)) {
-    cb(null, true);
-  } else {
-    cb(new Error('Invalid file type. Only PDF, Word, TXT, and images are allowed.') as any, false);
-  }
+/**
+ * Validate a file's MIME type.
+ */
+export const validateFileType = (mimeType: string): boolean => {
+  return ALLOWED_MIME_TYPES.includes(mimeType);
 };
-
-export const upload = multer({
-  storage,
-  fileFilter,
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
-  },
-});

@@ -10,7 +10,7 @@ export const analyticsService = {
 
     // Sum document sizes
     const documents = await Document.find({});
-    const totalStorageBytes = documents.reduce((sum, doc) => sum + (doc.sizeBytes || 0), 0);
+    const totalStorageBytes = documents.reduce((sum, doc) => sum + (doc.fileSize || 0), 0);
 
     return {
       users: { total: userCount },
