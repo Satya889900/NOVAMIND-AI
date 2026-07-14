@@ -18,14 +18,16 @@ export const handleAiChat = asyncHandler(async (req: Request, res: Response) => 
   await chatService.createMessage(conversationId, userId, userMessage, 'text');
 
   // 2. Generate AI response (loads history inside)
-  const aiResponseContent = await aiService.generateChatResponse(conversationId, userMessage);
+  const aiResponse = await aiService.generateChatResponse(conversationId, userMessage);
 
   // 3. Save the AI's message
   const aiMessage = await chatService.createMessage(
     conversationId,
     env.GEMINI_BOT_ID,
-    aiResponseContent,
-    'text'
+    aiResponse.content,
+    aiResponse.type,
+    aiResponse.fileUrl,
+    aiResponse.fileName
   );
 
   // 4. Return the AI's response to the frontend

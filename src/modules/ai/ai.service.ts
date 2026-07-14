@@ -8,6 +8,14 @@ import { ApiError } from '../../utils/ApiError';
 import { env } from '../../config/env';
 import https from 'https';
 import http from 'http';
+import { uploadToCloudinary } from '../../config/multer';
+
+export interface AiResponse {
+  content: string;
+  type: 'text' | 'image';
+  fileUrl?: string;
+  fileName?: string;
+}
 
 function downloadFileToBuffer(url: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -27,16 +35,76 @@ function downloadFileToBuffer(url: string): Promise<Buffer> {
   });
 }
 
+function generateImageViaGemini(prompt: string, apiKey: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const postData = JSON.stringify({
+      contents: [
+        {
+          parts: [
+            {
+              text: prompt,
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        responseModalities: ['IMAGE'],
+      },
+    });
+
+    const options = {
+      hostname: 'generativelanguage.googleapis.com',
+      path: '/v1beta/models/gemini-3.1-flash-image:generateContent',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf-8');
+        if (res.statusCode && res.statusCode >= 400) {
+          return reject(new Error(`HTTP ${res.statusCode}: ${body}`));
+        }
+        try {
+          const parsed = JSON.parse(body);
+          const parts = parsed?.candidates?.[0]?.content?.parts;
+          const imagePart = parts?.find((p: any) => p.inlineData);
+          const base64Bytes = imagePart?.inlineData?.data;
+          
+          if (!base64Bytes) {
+            return reject(new Error(`No image bytes in response: ${body}`));
+          }
+          resolve(Buffer.from(base64Bytes, 'base64'));
+        } catch (e: any) {
+          reject(e);
+        }
+      });
+      res.on('error', reject);
+    });
+
+    req.on('error', reject);
+    req.write(postData);
+    req.end();
+  });
+}
+
 const SYSTEM_INSTRUCTION = `You are NovaMind AI — a helpful, friendly, and intelligent AI assistant.
 
 Key behaviors:
 - Respond naturally and conversationally like a knowledgeable friend.
 - Give clear, well-structured, and helpful answers.
-- Use markdown formatting: bold for emphasis, bullet lists for points, numbered lists for steps, code blocks for code.
-- If asked to write code, always use fenced code blocks with the language name (e.g. \`\`\`python).
-- Be warm, supportive, and professional.
-- If you don't know something, say so honestly.
-- Keep responses focused and avoid unnecessary filler text.`;
+- Use markdown formatting.
+- If the user asks you to generate, create, draw, or show an image (e.g., "draw a cute puppy", "generate an image of a sunset"), you MUST respond ONLY with a JSON object in this exact format:
+{
+  "action": "generate_image",
+  "prompt": "<detailed, descriptive English prompt for image generation, optimized for DALL-E/Imagen>"
+}
+Do not include any other text if you are generating an image.`;
 
 /**
  * Try generating content with model fallback.
@@ -94,7 +162,7 @@ export const aiService = {
   /**
    * Generates an AI response using conversation history for context.
    */
-  generateChatResponse: async (conversationId: string, userMessage: string): Promise<string> => {
+  generateChatResponse: async (conversationId: string, userMessage: string): Promise<AiResponse> => {
     if (!aiClient) {
       throw new ApiError(503, 'AI Service is not available. Please configure GEMINI_API_KEY in .env');
     }
@@ -167,10 +235,80 @@ export const aiService = {
 
     try {
       const finalPrompt = promptParts.length > 1 ? promptParts : messageToSend;
-      return await generateWithFallback(finalPrompt, history);
+      const textResponse = await generateWithFallback(finalPrompt, history);
+
+      // Check if response is an image generation JSON payload
+      const trimmed = textResponse.trim();
+      if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          const isGenerateAction = parsed.action === 'generate_image' || parsed.action === 'dalle.text2im';
+
+          if (isGenerateAction) {
+            let promptText = '';
+
+            if (parsed.prompt) {
+              promptText = parsed.prompt;
+            } else if (parsed.action_input) {
+              if (typeof parsed.action_input === 'string') {
+                try {
+                  const subParsed = JSON.parse(parsed.action_input);
+                  promptText = subParsed.prompt || parsed.action_input;
+                } catch {
+                  promptText = parsed.action_input;
+                }
+              } else if (typeof parsed.action_input === 'object') {
+                promptText = parsed.action_input.prompt || '';
+              }
+            }
+
+            if (promptText) {
+              // Enhance prompt for maximum details and quality (high-level image output)
+              const enhancedPrompt = `${promptText.trim()}, 8k resolution, highly detailed, cinematic lighting, photorealistic, clean composition, professional digital art, masterpiece`;
+              logger.info(`AI requested image generation for: ${promptText}`);
+
+              // 1. Fetch generated image (try Gemini Imagen 3 first, fall back to Pollinations)
+              let imageBuffer: Buffer;
+              try {
+                if (env.GEMINI_API_KEY) {
+                  logger.info(`Attempting image generation via Gemini 3.1 Flash Image ("Banana")...`);
+                  imageBuffer = await generateImageViaGemini(enhancedPrompt, env.GEMINI_API_KEY);
+                } else {
+                  throw new Error('GEMINI_API_KEY is not configured');
+                }
+              } catch (err: any) {
+                logger.warn(`Gemini 3.1 Flash Image ("Banana") failed (${err.message}). Falling back to Pollinations.ai...`);
+                const encodedPrompt = encodeURIComponent(enhancedPrompt);
+                const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true&model=flux&enhance=true`;
+                imageBuffer = await downloadFileToBuffer(imageUrl);
+              }
+
+              // 2. Upload generated image to Cloudinary
+              const cloudResult = await uploadToCloudinary(imageBuffer, 'generated_image.png', 'novamind/ai_generated');
+
+              return {
+                content: promptText,
+                type: 'image',
+                fileUrl: cloudResult.secure_url,
+                fileName: 'generated_image.png',
+              };
+            }
+          }
+        } catch (e: any) {
+          logger.error(`Failed to parse AI JSON or generate image: ${e.message}`);
+        }
+      }
+
+      return {
+        content: textResponse,
+        type: 'text',
+      };
     } catch (error: any) {
       logger.error(`All AI models failed for conversation ${conversationId}: ${error.message}`);
-      return `I'm sorry, the AI service is temporarily unavailable. Please try again in a moment.`;
+      return {
+        content: `I'm sorry, the AI service is temporarily unavailable. Please try again in a moment.`,
+        type: 'text',
+      };
     }
   },
 

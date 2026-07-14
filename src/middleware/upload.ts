@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import Busboy from 'busboy';
 import { validateFileType } from '../config/multer';
+import { logger } from '../config/logger';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
@@ -33,6 +34,14 @@ export const parseSingleFile = (req: Request, res: Response, next: NextFunction)
     res.status(400).json({ success: false, message: 'Content-Type must be multipart/form-data' });
     return;
   }
+
+  // Handle request level errors to prevent ECONNRESET/abrupt client closures from crashing process
+  req.on('error', (err: any) => {
+    logger.error(`Request socket error: ${err.message}`);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: `Request error: ${err.message}` });
+    }
+  });
 
   const busboy = Busboy({
     headers: req.headers,
@@ -68,10 +77,12 @@ export const parseSingleFile = (req: Request, res: Response, next: NextFunction)
 
     fileStream.on('end', () => {
       if (fileTruncated) {
-        res.status(400).json({
-          success: false,
-          message: `File exceeds the ${MAX_FILE_SIZE / (1024 * 1024)} MB size limit.`,
-        });
+        if (!res.headersSent) {
+          res.status(400).json({
+            success: false,
+            message: `File exceeds the ${MAX_FILE_SIZE / (1024 * 1024)} MB size limit.`,
+          });
+        }
         return;
       }
 
@@ -84,23 +95,24 @@ export const parseSingleFile = (req: Request, res: Response, next: NextFunction)
         buffer,
         size: buffer.length,
       };
+
+      // Call next() strictly after the file buffer has been fully concatenated and populated
+      if (!res.headersSent) {
+        next();
+      }
     });
   });
 
   busboy.on('finish', () => {
-    if (!fileReceived) {
+    if (!fileReceived && !res.headersSent) {
       res.status(400).json({ success: false, message: 'No file uploaded' });
-      return;
-    }
-    // Only call next if we haven't already sent a response
-    if (!res.headersSent) {
-      next();
     }
   });
 
   busboy.on('error', (err: Error) => {
+    logger.error(`Busboy parsing error: ${err.message}`);
     if (!res.headersSent) {
-      res.status(500).json({ success: false, message: `Upload error: ${err.message}` });
+      res.status(500).json({ success: false, message: `Upload parsing error: ${err.message}` });
     }
   });
 
@@ -116,6 +128,14 @@ export const parseChatFile = (req: Request, res: Response, next: NextFunction): 
     res.status(400).json({ success: false, message: 'Content-Type must be multipart/form-data' });
     return;
   }
+
+  // Handle request level errors to prevent ECONNRESET/abrupt client closures from crashing process
+  req.on('error', (err: any) => {
+    logger.error(`Request socket error in chat upload: ${err.message}`);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: `Request error: ${err.message}` });
+    }
+  });
 
   const busboy = Busboy({
     headers: req.headers,
@@ -162,10 +182,12 @@ export const parseChatFile = (req: Request, res: Response, next: NextFunction): 
 
     fileStream.on('end', () => {
       if (fileTruncated) {
-        res.status(400).json({
-          success: false,
-          message: `File exceeds the ${MAX_FILE_SIZE / (1024 * 1024)} MB size limit.`,
-        });
+        if (!res.headersSent) {
+          res.status(400).json({
+            success: false,
+            message: `File exceeds the ${MAX_FILE_SIZE / (1024 * 1024)} MB size limit.`,
+          });
+        }
         return;
       }
 
@@ -178,23 +200,24 @@ export const parseChatFile = (req: Request, res: Response, next: NextFunction): 
         buffer,
         size: buffer.length,
       };
+
+      // Call next() strictly after the file buffer has been fully concatenated and populated
+      if (!res.headersSent) {
+        next();
+      }
     });
   });
 
   busboy.on('finish', () => {
-    if (!fileReceived) {
+    if (!fileReceived && !res.headersSent) {
       res.status(400).json({ success: false, message: 'No file uploaded' });
-      return;
-    }
-    // Only call next if we haven't already sent a response
-    if (!res.headersSent) {
-      next();
     }
   });
 
   busboy.on('error', (err: Error) => {
+    logger.error(`Busboy chat parsing error: ${err.message}`);
     if (!res.headersSent) {
-      res.status(500).json({ success: false, message: `Upload error: ${err.message}` });
+      res.status(500).json({ success: false, message: `Upload parsing error: ${err.message}` });
     }
   });
 

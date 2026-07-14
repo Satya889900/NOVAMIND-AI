@@ -67,14 +67,16 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
         }
 
         // Generate AI response using Gemini
-        const aiResponseText = await aiService.generateChatResponse(roomId, content);
+        const aiResponse = await aiService.generateChatResponse(roomId, content);
 
         // Save the AI response as a message from the bot
         aiReply = await chatService.createMessage(
           roomId,
           botUserId,
-          aiResponseText,
-          'text'
+          aiResponse.content,
+          aiResponse.type,
+          aiResponse.fileUrl,
+          aiResponse.fileName
         );
 
         logger.info(`AI auto-replied in conversation ${roomId}`);
