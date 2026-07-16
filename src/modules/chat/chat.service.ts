@@ -16,7 +16,8 @@ export const chatService = {
     content: string,
     type: 'text' | 'image' | 'file' = 'text',
     fileUrl = '',
-    fileName = ''
+    fileName = '',
+    model = ''
   ) => {
     const conversation = await Conversation.findById(roomId);
     if (!conversation) {
@@ -30,6 +31,7 @@ export const chatService = {
       type,
       fileUrl,
       fileName,
+      model,
     });
 
     conversation.lastMessage = message.id as any;

@@ -9,12 +9,13 @@ export const getRooms = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const createRoom = asyncHandler(async (req: Request, res: Response) => {
-  const { name, isGroup, participantIds } = req.body;
+  const { name, isGroup, participantIds, documentId } = req.body;
   const room = await conversationService.createRoom(
     name,
     isGroup,
     participantIds || [],
-    req.user.id
+    req.user.id,
+    documentId
   );
   return sendSuccess(res, 'Conversation created successfully', room, 201);
 });

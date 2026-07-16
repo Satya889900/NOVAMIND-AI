@@ -8,6 +8,7 @@ import { adminRouter } from './admin.routes';
 import { dashboardRouter } from './dashboard.routes';
 import { systemRouter } from './system.routes';
 import { aiRouter } from './ai.routes';
+import { settingsRouter } from './settings.routes';
 
 const router = Router();
 
@@ -23,6 +24,7 @@ v1Router.use('/documents', documentRouter);
 v1Router.use('/admin', adminRouter);
 v1Router.use('/dashboard', dashboardRouter);
 v1Router.use('/ai', aiRouter);
+v1Router.use('/settings', settingsRouter);
 
 router.use('/v1', v1Router);
 

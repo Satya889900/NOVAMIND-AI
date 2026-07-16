@@ -43,6 +43,10 @@ const DocumentSchema = new Schema(
       enum: ['Uploaded', 'Processing', 'Completed', 'Ready', 'Failed'],
       default: 'Uploaded',
     },
+    isStarred: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

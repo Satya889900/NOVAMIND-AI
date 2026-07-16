@@ -2,6 +2,7 @@ import { Document } from '../../models/Document';
 import { DocumentChunk } from '../../models/DocumentChunk';
 import { parserService } from './parser.service';
 import { chunkService } from './chunk.service';
+import { embeddingService } from './embedding.service';
 import { ApiError } from '../../utils/ApiError';
 import { logger } from '../../config/logger';
 
@@ -30,12 +31,29 @@ export const documentService = {
       const chunks = chunkService.splitTextIntoChunks(text, 1000, 100);
       logger.info(`Document split into ${chunks.length} chunks`);
 
-      // 3. Save chunks in DB
-      const chunkRecords = chunks.map((chunk, index) => ({
-        documentId: document.id,
-        chunkIndex: index,
-        content: chunk,
-      }));
+      // 3. Save chunks in DB with embeddings (batch size of 5 to prevent rate limit issues)
+      const chunkRecords = [];
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+        const batch = chunks.slice(i, i + BATCH_SIZE);
+        const promises = batch.map(async (chunk, batchIndex) => {
+          const index = i + batchIndex;
+          let vector: number[] | undefined;
+          try {
+            vector = await embeddingService.generateEmbedding(chunk);
+          } catch (embedErr: any) {
+            logger.warn(`Failed to generate embedding for chunk ${index}: ${embedErr.message}`);
+          }
+          return {
+            documentId: document.id,
+            chunkIndex: index,
+            content: chunk,
+            vector,
+          };
+        });
+        const results = await Promise.all(promises);
+        chunkRecords.push(...results);
+      }
 
       if (chunkRecords.length > 0) {
         await DocumentChunk.insertMany(chunkRecords);

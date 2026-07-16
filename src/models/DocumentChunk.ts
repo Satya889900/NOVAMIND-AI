@@ -19,6 +19,10 @@ const DocumentChunkSchema = new Schema(
       type: Schema.Types.Mixed,
       default: {},
     },
+    vector: {
+      type: [Number],
+      required: false,
+    },
   },
   {
     timestamps: true,

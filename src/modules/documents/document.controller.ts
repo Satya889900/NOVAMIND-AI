@@ -52,3 +52,13 @@ export const deleteDocument = asyncHandler(async (req: Request, res: Response) =
   const result = await uploadService.deleteDocument(req.params.id, req.user.id);
   return sendSuccess(res, 'Document deleted successfully', result);
 });
+
+export const toggleStarDocument = asyncHandler(async (req: Request, res: Response) => {
+  const doc = await Document.findOne({ _id: req.params.id, userId: req.user.id });
+  if (!doc) {
+    throw new ApiError(404, 'Document not found or access denied');
+  }
+  doc.isStarred = !doc.isStarred;
+  await doc.save();
+  return sendSuccess(res, doc.isStarred ? 'Document starred' : 'Document unstarred', doc);
+});

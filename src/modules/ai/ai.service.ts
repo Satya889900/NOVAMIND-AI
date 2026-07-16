@@ -1,9 +1,8 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { aiClient, MODEL_FALLBACK_ORDER } from '../../config/gemini';
+import { ProviderFactory } from './providers/provider.factory';
 import { logger } from '../../config/logger';
 import { Message } from '../../models/Message';
 import { User } from '../../models/User';
-import { Conversation } from '../../models/Conversation';
+import { Document } from '../../models/Document';
 import { ApiError } from '../../utils/ApiError';
 import { env } from '../../config/env';
 import https from 'https';
@@ -20,76 +19,26 @@ export interface AiResponse {
 function downloadFileToBuffer(url: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https') ? https : http;
-    client.get(url, (res) => {
+    const req = client.get(url, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
         return downloadFileToBuffer(res.headers.location).then(resolve).catch(reject);
       }
       if (res.statusCode && res.statusCode >= 400) {
+        res.resume();
         return reject(new Error(`HTTP status code ${res.statusCode}`));
       }
       const chunks: Buffer[] = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => resolve(Buffer.concat(chunks)));
       res.on('error', reject);
-    }).on('error', reject);
-  });
-}
-
-function generateImageViaGemini(prompt: string, apiKey: string): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const postData = JSON.stringify({
-      contents: [
-        {
-          parts: [
-            {
-              text: prompt,
-            },
-          ],
-        },
-      ],
-      generationConfig: {
-        responseModalities: ['IMAGE'],
-      },
     });
-
-    const options = {
-      hostname: 'generativelanguage.googleapis.com',
-      path: '/v1beta/models/gemini-3.1-flash-image:generateContent',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      const chunks: Buffer[] = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => {
-        const body = Buffer.concat(chunks).toString('utf-8');
-        if (res.statusCode && res.statusCode >= 400) {
-          return reject(new Error(`HTTP ${res.statusCode}: ${body}`));
-        }
-        try {
-          const parsed = JSON.parse(body);
-          const parts = parsed?.candidates?.[0]?.content?.parts;
-          const imagePart = parts?.find((p: any) => p.inlineData);
-          const base64Bytes = imagePart?.inlineData?.data;
-          
-          if (!base64Bytes) {
-            return reject(new Error(`No image bytes in response: ${body}`));
-          }
-          resolve(Buffer.from(base64Bytes, 'base64'));
-        } catch (e: any) {
-          reject(e);
-        }
-      });
-      res.on('error', reject);
+    // 10-second timeout: context image is optional, never block the AI reply for it
+    req.setTimeout(10_000, () => {
+      req.destroy();
+      reject(new Error('Context image download timed out after 10s'));
     });
-
     req.on('error', reject);
-    req.write(postData);
-    req.end();
   });
 }
 
@@ -106,67 +55,15 @@ Key behaviors:
 }
 Do not include any other text if you are generating an image.`;
 
-/**
- * Try generating content with model fallback.
- * If the primary model fails with 503/429/404, try the next model in the list.
- */
-async function generateWithFallback(
-  prompt: string | any[],
-  history: { role: string; parts: { text: string }[] }[] = []
-): Promise<string> {
-  if (!aiClient) throw new ApiError(503, 'AI client is not initialized. Check GEMINI_API_KEY in .env');
-
-  const errors: string[] = [];
-
-  for (const modelName of MODEL_FALLBACK_ORDER) {
-    try {
-      const model = (aiClient as GoogleGenerativeAI).getGenerativeModel({ model: modelName });
-
-      let text: string;
-
-      if (history.length > 0) {
-        // Multi-turn chat with history
-        const chat = model.startChat({
-          history,
-          generationConfig: { maxOutputTokens: 2048, temperature: 0.8 },
-        });
-        const result = await chat.sendMessage(prompt);
-        text = result.response.text();
-      } else {
-        // Single-turn generation
-        const result = await model.generateContent(prompt);
-        text = result.response.text();
-      }
-
-      if (text && text.trim()) {
-        if (modelName !== MODEL_FALLBACK_ORDER[0]) {
-          logger.info(`AI responded using fallback model: ${modelName}`);
-        }
-        return text;
-      }
-    } catch (err: any) {
-      const msg = err.message || String(err);
-      errors.push(`[${modelName}]: ${msg}`);
-      logger.warn(`Model ${modelName} failed: ${msg}`);
-
-      // Only continue to fallback for retriable errors (503, 429, 404)
-      const isRetriable = msg.includes('503') || msg.includes('429') || msg.includes('404') || msg.includes('not found') || msg.includes('high demand') || msg.includes('quota');
-      if (!isRetriable) break;
-    }
-  }
-
-  throw new Error(`All models failed:\n${errors.join('\n')}`);
-}
-
 export const aiService = {
   /**
    * Generates an AI response using conversation history for context.
    */
-  generateChatResponse: async (conversationId: string, userMessage: string): Promise<AiResponse> => {
-    if (!aiClient) {
-      throw new ApiError(503, 'AI Service is not available. Please configure GEMINI_API_KEY in .env');
-    }
-
+  generateChatResponse: async (
+    conversationId: string, 
+    userMessage: string,
+    options?: { model?: string; temperature?: number; maxTokens?: number }
+  ): Promise<AiResponse> => {
     const botUserId = env.GEMINI_BOT_ID
       ? env.GEMINI_BOT_ID
       : (await User.findOne({ email: 'novamind-ai@novamind.ai' }))?._id?.toString();
@@ -176,66 +73,59 @@ export const aiService = {
       .sort({ createdAt: 'asc' })
       .limit(40);
 
-    // CRITICAL: Exclude the last saved message (the current user msg) from history
-    // since we send it separately. Prevents duplicate consecutive 'user' turns.
+    // Exclude the last saved message (the current user msg) from history
     const historyMessages = allMessages.slice(0, -1);
 
-    // Build valid Gemini history with alternating roles
+    // Build unified history
     const rawHistory = historyMessages
       .filter((msg) => msg.content && msg.content.trim() !== '')
       .map((msg) => ({
-        role: botUserId && msg.senderId.toString() === botUserId ? 'model' : 'user',
-        parts: [{ text: msg.content }],
+        role: botUserId && msg.senderId.toString() === botUserId ? ('model' as const) : ('user' as const),
+        content: msg.content,
       }));
 
-    // Merge consecutive same-role turns (Gemini requires strict alternation)
-    const history: { role: string; parts: { text: string }[] }[] = [];
-    for (const entry of rawHistory) {
-      if (history.length === 0 || history[history.length - 1].role !== entry.role) {
-        history.push({ ...entry });
-      } else {
-        history[history.length - 1].parts[0].text += '\n' + entry.parts[0].text;
-      }
-    }
-
     // Prepend system instruction to the first message if no history yet
-    const messageToSend = history.length === 0
+    const messageToSend = rawHistory.length === 0
       ? `${SYSTEM_INSTRUCTION}\n\n${userMessage}`
       : userMessage;
 
     // Check recent history (last 5 messages) for an image attachment
-    let promptParts: any[] = [];
+    let imageAttachment: { mimeType: string; data: string } | undefined;
     const recentMessages = allMessages.slice(-5);
     const imageMessage = [...recentMessages].reverse().find(m => m.type === 'image' && m.fileUrl);
 
     if (imageMessage && imageMessage.fileUrl) {
       try {
-        logger.info(`Downloading image for Gemini prompt: ${imageMessage.fileUrl}`);
+        logger.info(`Downloading image for prompt: ${imageMessage.fileUrl}`);
         const imageBuffer = await downloadFileToBuffer(imageMessage.fileUrl);
         
-        // Determine correct mime type
         let mimeType = 'image/jpeg';
         if (imageMessage.fileUrl.endsWith('.png')) mimeType = 'image/png';
         else if (imageMessage.fileUrl.endsWith('.webp')) mimeType = 'image/webp';
         else if (imageMessage.fileUrl.endsWith('.gif')) mimeType = 'image/gif';
 
-        promptParts.push({
-          inlineData: {
-            mimeType,
-            data: imageBuffer.toString('base64'),
-          },
-        });
+        imageAttachment = {
+          mimeType,
+          data: imageBuffer.toString('base64'),
+        };
       } catch (err: any) {
-        logger.error(`Failed to download image for Gemini prompt: ${err.message}`);
+        logger.error(`Failed to download image for AI prompt: ${err.message}`);
       }
     }
 
-    // Add the text query part
-    promptParts.push({ text: messageToSend });
-
     try {
-      const finalPrompt = promptParts.length > 1 ? promptParts : messageToSend;
-      const textResponse = await generateWithFallback(finalPrompt, history);
+      const modelName = options?.model || 'gemini-3.1-flash-lite';
+      const provider = ProviderFactory.getProvider(modelName);
+      
+      logger.info(`Routing request to AI Provider: ${provider.name} (Model: ${modelName})`);
+      
+      const textResponse = await provider.generateResponse(messageToSend, {
+        history: rawHistory,
+        temperature: options?.temperature,
+        maxTokens: options?.maxTokens,
+        model: modelName,
+        imageAttachment,
+      });
 
       // Check if response is an image generation JSON payload
       const trimmed = textResponse.trim();
@@ -263,28 +153,40 @@ export const aiService = {
             }
 
             if (promptText) {
-              // Enhance prompt for maximum details and quality (high-level image output)
-              const enhancedPrompt = `${promptText.trim()}, 8k resolution, highly detailed, cinematic lighting, photorealistic, clean composition, professional digital art, masterpiece`;
-              logger.info(`AI requested image generation for: ${promptText}`);
+              logger.info(`AI requested image generation for prompt: ${promptText}`);
 
-              // 1. Fetch generated image (try Gemini Imagen 3 first, fall back to Pollinations)
+              // Generate image using the provider's generateImage method (which automatically selects the best AI)
               let imageBuffer: Buffer;
-              try {
-                if (env.GEMINI_API_KEY) {
-                  logger.info(`Attempting image generation via Gemini 3.1 Flash Image ("Banana")...`);
-                  imageBuffer = await generateImageViaGemini(enhancedPrompt, env.GEMINI_API_KEY);
-                } else {
-                  throw new Error('GEMINI_API_KEY is not configured');
-                }
-              } catch (err: any) {
-                logger.warn(`Gemini 3.1 Flash Image ("Banana") failed (${err.message}). Falling back to Pollinations.ai...`);
-                const encodedPrompt = encodeURIComponent(enhancedPrompt);
-                const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true&model=flux&enhance=true`;
-                imageBuffer = await downloadFileToBuffer(imageUrl);
+              if (provider.generateImage) {
+                imageBuffer = await provider.generateImage(promptText);
+              } else {
+                // Fallback to GeminiProvider direct instantiation if provider doesn't implement generateImage
+                const geminiProvider = ProviderFactory.getProvider('gemini-3.1-flash-lite');
+                imageBuffer = await geminiProvider.generateImage!(promptText);
               }
 
-              // 2. Upload generated image to Cloudinary
+              // Upload generated image to Cloudinary
               const cloudResult = await uploadToCloudinary(imageBuffer, 'generated_image.png', 'novamind/ai_generated');
+
+              // Save to Document collection for the user
+              const lastMsg = allMessages[allMessages.length - 1];
+              if (lastMsg && lastMsg.senderId) {
+                try {
+                  await Document.create({
+                    userId: lastMsg.senderId,
+                    conversationId,
+                    fileName: cloudResult.public_id.split('/').pop() || 'generated_image.png',
+                    originalName: `Generated: ${promptText.substring(0, 30)}.png`,
+                    fileType: 'image/png',
+                    fileSize: imageBuffer.length,
+                    storagePath: cloudResult.secure_url,
+                    cloudinaryPublicId: cloudResult.public_id,
+                    status: 'Ready',
+                  });
+                } catch (docErr: any) {
+                  logger.error(`Failed to save generated image to Document schema: ${docErr.message}`);
+                }
+              }
 
               return {
                 content: promptText,
@@ -304,9 +206,9 @@ export const aiService = {
         type: 'text',
       };
     } catch (error: any) {
-      logger.error(`All AI models failed for conversation ${conversationId}: ${error.message}`);
+      logger.error(`AI model invocation failed: ${error.message}`);
       return {
-        content: `I'm sorry, the AI service is temporarily unavailable. Please try again in a moment.`,
+        content: `I'm sorry, the AI service encountered an error. Please try again.`,
         type: 'text',
       };
     }
@@ -342,14 +244,13 @@ export const aiService = {
   /**
    * Generates a smart short title for a new conversation.
    */
-  generateTitle: async (firstMessage: string): Promise<string> => {
-    if (!aiClient) return firstMessage.substring(0, 25);
-
+  generateTitle: async (firstMessage: string, modelName?: string): Promise<string> => {
     try {
-      const prompt = `Generate a very short chat title (3-5 words max) summarizing this message. No quotes, no punctuation at end.\n\nMessage: "${firstMessage}"\n\nTitle:`;
-      const title = await generateWithFallback(prompt);
-      return title.trim().replace(/^["'](.*)["']$/, '$1') || firstMessage.substring(0, 25);
-    } catch {
+      const model = modelName || 'gemini-3.1-flash-lite';
+      const provider = ProviderFactory.getProvider(model);
+      return await provider.generateTitle(firstMessage);
+    } catch (err: any) {
+      logger.error(`Title generation failed: ${err.message}`);
       return firstMessage.substring(0, 25);
     }
   },

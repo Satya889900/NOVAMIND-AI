@@ -30,6 +30,10 @@ const MessageSchema = new Schema(
       type: String,
       default: '',
     },
+    model: {
+      type: String,
+      default: '',
+    },
   },
   {
     timestamps: true,
