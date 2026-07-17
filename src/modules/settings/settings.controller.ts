@@ -11,6 +11,8 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
   const isMockDeepSeek = !env.DEEPSEEK_API_KEY || env.DEEPSEEK_API_KEY.includes('mock') || env.DEEPSEEK_API_KEY.includes('your_deepseek');
   const isMockOpenRouter = !env.OPENROUTER_API_KEY || env.OPENROUTER_API_KEY.includes('mock') || env.OPENROUTER_API_KEY.includes('your_openrouter');
   const isMockOpenAi = !env.OPENAI_API_KEY || env.OPENAI_API_KEY.includes('mock') || env.OPENAI_API_KEY.includes('your_openai');
+  const isMockCerebras = !env.CEREBRAS_API_KEY || env.CEREBRAS_API_KEY.includes('mock') || env.CEREBRAS_API_KEY.includes('your_cerebras');
+  const isMockCloudflare = !env.CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_API_TOKEN.includes('your_cloudflare') || env.CLOUDFLARE_API_TOKEN.includes('mock') || !env.CLOUDFLARE_ACCOUNT_ID || env.CLOUDFLARE_ACCOUNT_ID.includes('your_cloudflare');
 
   return sendSuccess(res, 'AI Provider status retrieved', {
     providers: [
@@ -55,6 +57,24 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
         models: [
           { id: 'deepseek-chat', name: 'DeepSeek V3', badge: 'Intelligence', description: 'DeepSeek V3 model (Turbo). High performance general reasoning and conversation.' },
           { id: 'deepseek-reasoner', name: 'DeepSeek R1', badge: 'Reasoning', description: 'DeepSeek R1 reasoning model (Turbo). Excellent at math, coding, and logical thinking.' },
+        ],
+      },
+      {
+        id: 'cerebras',
+        name: 'Cerebras AI',
+        configured: true,
+        models: [
+          { id: 'cerebras/llama3.1-8b',    name: 'Llama 3.1 · 8B (Cerebras)',  badge: 'Ultra Fast',    description: 'Cerebras-hosted Llama 3.1 8B running at 1000+ tokens/sec.' },
+          { id: 'cerebras/llama-3.3-70b',  name: 'Llama 3.3 · 70B (Cerebras)', badge: 'Advanced Logic', description: 'Cerebras-hosted Llama 3.3 70B — best quality with blazing fast inference.' },
+          { id: 'cerebras/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout · 17B (Cerebras)', badge: 'Latest',  description: 'Meta Llama 4 Scout 17B — newest Cerebras model with 16 experts MoE architecture.' },
+        ],
+      },
+      {
+        id: 'cloudflare',
+        name: 'Cloudflare Workers AI',
+        configured: true,
+        models: [
+          { id: 'cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast', name: 'Llama 3.3 · 70B (CF)', badge: 'Best Overall', description: 'Meta Llama 3.3 70B FP8 Fast — best quality model for chat, coding & assistant tasks on Cloudflare edge.' },
         ],
       },
       {

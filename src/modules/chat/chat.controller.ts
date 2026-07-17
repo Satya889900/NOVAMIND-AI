@@ -191,17 +191,21 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
       if (
         errMsg.includes('insufficient balance') || 
         errMsg.includes('insufficient_funds') || 
+        errMsg.includes('insufficient_quota') || 
         errMsg.includes('balance') || 
         errMsg.includes('credit') ||
         errMsg.includes('402') ||
+        errMsg.includes('429') ||
         errMsg.includes('payment') ||
         errMsg.includes('billing') ||
         errMsg.includes('quota') ||
         errMsg.includes('plan expired') ||
         errMsg.includes('expired')
       ) {
-        friendlyError = `⚠️ **AI API Billing Alert: Plan Expired / Insufficient Credits**\n\nYour API account balance has run out of funds, or your active subscription plan has expired. Please check your billing details or top up your balance at the model provider's developer console to continue using this model.`;
-      } else if (errMsg.includes('401') || errMsg.includes('unauthorized') || errMsg.includes('api_key') || errMsg.includes('invalid_api_key')) {
+        friendlyError = `⚠️ **AI API Billing Alert: Plan Expired / Quota Exceeded**\n\nYour API account has run out of credits or exceeded its usage quota. Please check your billing details or top up your balance at the model provider's developer console to continue using this model.`;
+      } else if (errMsg.includes('model_not_found') || errMsg.includes('model does not exist') || errMsg.includes('404')) {
+        friendlyError = `⚠️ **AI API Error: Model Not Found (HTTP 404)**\n\nThe selected model ID does not exist or you do not have access to it. Please select a different model or check your provider account permissions.`;
+      } else if (errMsg.includes('401') || errMsg.includes('unauthorized') || errMsg.includes('api_key') || errMsg.includes('invalid_api_key') || errMsg.includes('authentication error')) {
         friendlyError = `⚠️ **AI API Error: Unauthorized / Invalid API Key (HTTP 401)**\n\nPlease check that your API keys are correctly configured in the backend environment.`;
       }
       

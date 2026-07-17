@@ -6,6 +6,8 @@ import { BlackForestLabsProvider } from './flux.provider';
 import { DeepSeekProvider } from './deepseek.provider';
 import { OpenRouterProvider } from './openrouter.provider';
 import { OpenAiProvider } from './openai.provider';
+import { CerebrasProvider } from './cerebras.provider';
+import { CloudflareProvider } from './cloudflare.provider';
 
 export class ProviderFactory {
   private static geminiProvider = new GeminiProvider();
@@ -15,6 +17,8 @@ export class ProviderFactory {
   private static deepSeekProvider = new DeepSeekProvider();
   private static openRouterProvider = new OpenRouterProvider();
   private static openAiProvider = new OpenAiProvider();
+  private static cerebrasProvider = new CerebrasProvider();
+  private static cloudflareProvider = new CloudflareProvider();
 
   /**
    * Returns the AI Provider matching the model name.
@@ -30,6 +34,16 @@ export class ProviderFactory {
     // Check if the model corresponds to OpenAI
     if (lowerModel.includes('openai') || lowerModel.startsWith('gpt-')) {
       return this.openAiProvider;
+    }
+
+    // Check if the model corresponds to Cloudflare Workers AI
+    if (lowerModel.includes('cloudflare/') || lowerModel.includes('@cf/')) {
+      return this.cloudflareProvider;
+    }
+
+    // Check if the model corresponds to Cerebras
+    if (lowerModel.includes('cerebras')) {
+      return this.cerebrasProvider;
     }
 
     // Check if the model corresponds to Black Forest Labs (FLUX)
