@@ -48,6 +48,7 @@ Key behaviors:
 - Respond naturally and conversationally like a knowledgeable friend.
 - Give clear, well-structured, and helpful answers.
 - Use markdown formatting.
+- If the user sends a voice or audio attachment, it is a voice recording of them speaking. Listen to it, transcribe what they said, and answer their question. In your response, ALWAYS start with a transcription indicator line: "**[Transcribed Voice]:** '*your transcription of the user's spoken words*'\n\n" followed by your normal answer.
 - If the user asks you to generate, create, draw, or show an image (e.g., "draw a cute puppy", "generate an image of a sunset"), you MUST respond ONLY with a JSON object in this exact format:
 {
   "action": "generate_image",
@@ -113,6 +114,39 @@ export const aiService = {
       }
     }
 
+    // Check recent history (last 5 messages) for an audio/voice attachment
+    let audioAttachment: { mimeType: string; data: string } | undefined;
+    const audioMessage = [...recentMessages].reverse().find(m => 
+      m.fileUrl && (
+        m.fileUrl.endsWith('.webm') || 
+        m.fileUrl.endsWith('.wav') || 
+        m.fileUrl.endsWith('.mp3') || 
+        m.fileUrl.endsWith('.m4a') || 
+        m.fileName?.toLowerCase().includes('voice') ||
+        m.fileName?.toLowerCase().endsWith('.webm') ||
+        m.fileName?.toLowerCase().endsWith('.wav')
+      )
+    );
+
+    if (audioMessage && audioMessage.fileUrl) {
+      try {
+        logger.info(`Downloading audio message: ${audioMessage.fileUrl}`);
+        const audioBuffer = await downloadFileToBuffer(audioMessage.fileUrl);
+        
+        let mimeType = 'audio/webm';
+        if (audioMessage.fileUrl.endsWith('.wav') || audioMessage.fileName?.toLowerCase().endsWith('.wav')) mimeType = 'audio/wav';
+        else if (audioMessage.fileUrl.endsWith('.mp3') || audioMessage.fileName?.toLowerCase().endsWith('.mp3')) mimeType = 'audio/mp3';
+        else if (audioMessage.fileUrl.endsWith('.m4a') || audioMessage.fileName?.toLowerCase().endsWith('.m4a')) mimeType = 'audio/m4a';
+
+        audioAttachment = {
+          mimeType,
+          data: audioBuffer.toString('base64'),
+        };
+      } catch (err: any) {
+        logger.error(`Failed to download audio for AI prompt: ${err.message}`);
+      }
+    }
+
     try {
       const modelName = options?.model || 'gemini-3.1-flash-lite';
       const provider = ProviderFactory.getProvider(modelName);
@@ -125,7 +159,9 @@ export const aiService = {
         maxTokens: options?.maxTokens,
         model: modelName,
         imageAttachment,
+        audioAttachment,
       });
+
 
       // Check if response is an image generation JSON payload
       const trimmed = textResponse.trim();
@@ -252,6 +288,39 @@ export const aiService = {
     } catch (err: any) {
       logger.error(`Title generation failed: ${err.message}`);
       return firstMessage.substring(0, 25);
+    }
+  },
+
+  /**
+   * Transcribes audio using Gemini's native audio understanding.
+   */
+  transcribeAudio: async (audioUrl: string): Promise<string> => {
+    try {
+      logger.info(`Transcribing audio attachment: ${audioUrl}`);
+      const audioBuffer = await downloadFileToBuffer(audioUrl);
+      
+      let mimeType = 'audio/webm';
+      if (audioUrl.endsWith('.wav')) mimeType = 'audio/wav';
+      else if (audioUrl.endsWith('.mp3')) mimeType = 'audio/mp3';
+      else if (audioUrl.endsWith('.m4a')) mimeType = 'audio/m4a';
+
+      const audioAttachment = {
+        mimeType,
+        data: audioBuffer.toString('base64'),
+      };
+
+      const prompt = `Listen to the attached audio and transcribe it. Return only the transcription, nothing else.`;
+
+      const provider = ProviderFactory.getProvider('gemini-3.1-flash-lite');
+      const transcription = await provider.generateResponse(prompt, {
+        audioAttachment,
+      });
+
+      logger.info(`Transcription result: "${transcription.trim()}"`);
+      return transcription.trim();
+    } catch (err: any) {
+      logger.error(`Audio transcription failed: ${err.message}`);
+      return 'Voice Message';
     }
   },
 };

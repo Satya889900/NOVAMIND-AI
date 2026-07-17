@@ -163,7 +163,7 @@ export class GeminiProvider implements IAiProvider {
       }
     }
 
-    // Build prompt parts (with image attachment if present)
+    // Build prompt parts (with image or audio attachment if present)
     const promptParts: any[] = [];
     if (options?.imageAttachment) {
       promptParts.push({
@@ -173,9 +173,18 @@ export class GeminiProvider implements IAiProvider {
         },
       });
     }
+    if (options?.audioAttachment) {
+      promptParts.push({
+        inlineData: {
+          mimeType: options.audioAttachment.mimeType,
+          data: options.audioAttachment.data,
+        },
+      });
+    }
     promptParts.push({ text: prompt });
 
     const finalPrompt = promptParts.length > 1 ? promptParts : prompt;
+
     const errors: string[] = [];
 
     // Fallback logic

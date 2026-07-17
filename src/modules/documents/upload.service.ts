@@ -26,8 +26,17 @@ export const uploadService = {
     // 2. Delete related chunks in the database
     await DocumentChunk.deleteMany({ documentId: id });
 
-    // 3. Delete document record in the database
+    // 3. Delete related chunks in ChromaDB
+    try {
+      const { chromaService } = require('./chroma.service');
+      await chromaService.deleteDocumentChunks(id);
+    } catch (chromaErr: any) {
+      logger.warn(`Failed to clean up ChromaDB index for document ${id}: ${chromaErr.message}`);
+    }
+
+    // 4. Delete document record in the database
     await Document.deleteOne({ _id: id });
+
 
     logger.info(`Document ${id} and its chunks deleted successfully`);
 

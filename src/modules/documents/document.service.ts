@@ -59,14 +59,61 @@ export const documentService = {
         await DocumentChunk.insertMany(chunkRecords);
       }
 
+      // 4. Save chunks in ChromaDB vector store using LangChain
+      try {
+        const { chromaService } = require('./chroma.service');
+        await chromaService.addDocumentChunks(document.id, chunks);
+      } catch (chromaErr: any) {
+        logger.warn(`Failed to index document in ChromaDB: ${chromaErr.message}`);
+      }
+
+      // 5. Generate AI Summary, Key Takeaways, and Suggested Questions
+      try {
+        const { geminiService } = require('../ai/gemini.service');
+        const truncatedText = text.substring(0, 8000); // Send first 8k chars for summary
+        
+        const summaryPrompt = `Analyze the following document text and return a JSON object with:
+        1. "summary": a brief 3-4 sentence summary of the document.
+        2. "keyTakeaways": an array of 3-5 bullet point takeaways.
+        3. "suggestedQuestions": an array of 3-4 relevant questions a user might ask about this document.
+
+        Document Text:
+        ${truncatedText}
+
+        Return ONLY a valid JSON object in this exact structure, with no markdown code blocks, formatting, or extra commentary. Always respond with pure, parsable JSON.`;
+
+        logger.info(`Requesting AI summary for document ${document.id}`);
+        const aiResponseText = await geminiService.generateResponse(summaryPrompt);
+        
+        // Clean JSON response (strip markdown fences if Gemini added them)
+        const cleanJsonText = aiResponseText
+          .replace(/```json/g, '')
+          .replace(/```/g, '')
+          .trim();
+
+        try {
+          const parsed = JSON.parse(cleanJsonText);
+          document.summary = parsed.summary || '';
+          document.keyTakeaways = Array.isArray(parsed.keyTakeaways) ? parsed.keyTakeaways : [];
+          document.suggestedQuestions = Array.isArray(parsed.suggestedQuestions) ? parsed.suggestedQuestions : [];
+          logger.info(`Successfully generated and saved AI summary for document ${document.id}`);
+        } catch (jsonErr: any) {
+          logger.warn(`Failed to parse AI summary JSON: ${jsonErr.message}. Response was: "${aiResponseText}"`);
+        }
+      } catch (summaryErr: any) {
+        logger.warn(`Failed to generate document summary: ${summaryErr.message}`);
+      }
+
       // Transition: Completed -> Ready
       document.status = 'Ready';
       await document.save();
+
 
       return {
         document,
         chunksProcessed: chunks.length,
       };
+
     } catch (error: any) {
       logger.error(`Failed to process document ${documentId}: ${error.message}`);
       

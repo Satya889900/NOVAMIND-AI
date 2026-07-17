@@ -154,21 +154,35 @@ export const parseChatFile = (req: Request, res: Response, next: NextFunction): 
     'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'text/plain',
+    'audio/webm',
+    'audio/wav',
+    'audio/mpeg',
+    'audio/mp4',
+    'audio/ogg',
+    'audio/x-m4a',
+    'audio/amr',
   ];
 
   busboy.on('file', (fieldname, fileStream, info) => {
     const { filename, mimeType } = info;
     fileReceived = true;
 
-    // Validate mime type
-    if (!allowedChatMimeTypes.includes(mimeType)) {
+    // Clean mimetype by stripping parameters like codecs (e.g., audio/webm;codecs=opus -> audio/webm)
+    const cleanMimeType = mimeType.split(';')[0].trim().toLowerCase();
+
+    // Validate mime type (allow listed types OR any audio/ type)
+    const isAllowed = allowedChatMimeTypes.includes(cleanMimeType) || cleanMimeType.startsWith('audio/');
+
+    if (!isAllowed) {
       fileStream.resume(); // drain the stream
       res.status(400).json({
         success: false,
-        message: 'Invalid file type. Only PDF, Word, TXT, and images (JPEG, PNG, GIF, WEBP) are allowed.',
+        message: 'Invalid file type. Only PDF, Word, TXT, images (JPEG, PNG, GIF, WEBP), and audio files are allowed.',
       });
       return;
     }
+
+
 
     const chunks: Buffer[] = [];
 

@@ -6,7 +6,20 @@ export const retrieverService = {
   retrieveRelevantChunks: async (query: string, documentId: string, limit = 3) => {
     logger.info(`Retrieving relevant chunks for query: "${query}" in document: ${documentId}`);
 
-    // 1. Fetch all chunks associated with the document from DocumentChunk collection
+    // 1. Try querying ChromaDB first
+    try {
+      const { chromaService } = require('../documents/chroma.service');
+      const chromaResults = await chromaService.queryRelevantChunks(query, documentId, limit);
+      if (chromaResults !== null) {
+        logger.info(`Successfully retrieved ${chromaResults.length} chunks from ChromaDB`);
+        return chromaResults;
+      }
+    } catch (chromaErr: any) {
+      logger.warn(`ChromaDB query failed: ${chromaErr.message}. Falling back to MongoDB vector search.`);
+    }
+
+    // 2. Fallback: Fetch all chunks associated with the document from DocumentChunk collection
+
     const chunks = await DocumentChunk.find({ documentId });
     if (chunks.length === 0) {
       logger.warn(`No chunks found in database for document: ${documentId}`);

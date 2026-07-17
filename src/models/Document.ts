@@ -47,7 +47,20 @@ const DocumentSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    summary: {
+      type: String,
+      default: '',
+    },
+    keyTakeaways: {
+      type: [String],
+      default: [],
+    },
+    suggestedQuestions: {
+      type: [String],
+      default: [],
+    },
   },
+
   {
     timestamps: true,
   }

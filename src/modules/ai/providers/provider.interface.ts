@@ -12,7 +12,12 @@ export interface ProviderChatOptions {
     mimeType: string;
     data: string; // base64 bytes
   };
+  audioAttachment?: {
+    mimeType: string;
+    data: string; // base64 bytes
+  };
 }
+
 
 export interface IAiProvider {
   name: string;

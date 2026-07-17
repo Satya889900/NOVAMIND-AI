@@ -90,9 +90,36 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
       let aiResponse;
       if (conversation.documentId) {
         logger.info(`Conversation ${roomId} has documentId ${conversation.documentId}. Invoking RAG flow.`);
-        const answer = await ragService.answerQuestion(content, conversation.documentId.toString());
+        
+        let queryText = content;
+        const isAudioFile = fileUrl && (
+          fileUrl.endsWith('.webm') || 
+          fileUrl.endsWith('.wav') || 
+          fileUrl.endsWith('.mp3') || 
+          fileUrl.endsWith('.m4a') || 
+          fileName?.toLowerCase().includes('voice') ||
+          fileName?.toLowerCase().endsWith('.webm') ||
+          fileName?.toLowerCase().endsWith('.wav')
+        );
+
+        if (isAudioFile) {
+          logger.info(`Voice message detected in RAG room. Transcribing audio before query execution.`);
+          const transcription = await aiService.transcribeAudio(fileUrl);
+          queryText = transcription;
+          
+          // Update the user's message content in the database so the transcript is persistent in the chat UI
+          userMessage.content = `🎤 [Voice Message]: "${transcription}"`;
+          await userMessage.save();
+        }
+
+        const answer = await ragService.answerQuestion(queryText, conversation.documentId.toString());
+        
+        const finalAnswer = isAudioFile
+          ? `**[Transcribed Voice]:** *"${queryText}"*\n\n${answer}`
+          : answer;
+
         aiResponse = {
-          content: answer,
+          content: finalAnswer,
           type: 'text' as const,
         };
       } else if (modelName.toLowerCase().includes('flux')) {

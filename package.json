@@ -11,9 +11,12 @@
   },
   "dependencies": {
     "@google/generative-ai": "latest",
+    "@langchain/community": "^1.1.29",
+    "@langchain/core": "^1.2.3",
     "@types/busboy": "^1.5.4",
     "bcryptjs": "^2.4.3",
     "busboy": "^1.6.0",
+    "chromadb": "^3.5.0",
     "cloudinary": "^2.10.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
