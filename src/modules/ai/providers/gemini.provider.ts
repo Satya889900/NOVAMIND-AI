@@ -134,6 +134,48 @@ function generateImageViaGemini(prompt: string, apiKey: string): Promise<Buffer>
   });
 }
 
+function generateImageViaHuggingFace(prompt: string, apiKey: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const postData = JSON.stringify({
+      inputs: prompt,
+    });
+
+    const options = {
+      hostname: 'api-inference.huggingface.co',
+      path: '/models/black-forest-labs/FLUX.1-schnell',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      timeout: 30000,
+    };
+
+    const req = https.request(options, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const buffer = Buffer.concat(chunks);
+        if (res.statusCode && res.statusCode >= 400) {
+          const body = buffer.toString('utf-8');
+          return reject(new Error(`HTTP ${res.statusCode}: ${body}`));
+        }
+        resolve(buffer);
+      });
+      res.on('error', reject);
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Hugging Face API request timed out'));
+    });
+
+    req.on('error', reject);
+    req.write(postData);
+    req.end();
+  });
+}
+
 export class GeminiProvider implements IAiProvider {
   name = 'gemini';
 
@@ -255,7 +297,18 @@ export class GeminiProvider implements IAiProvider {
 
     if (inCooldown) {
       const remainingSecs = Math.ceil((imagenQuotaResetAt - now) / 1000);
-      logger.info(`Gemini Imagen is in quota cooldown for ${remainingSecs}s more. Using Pollinations.ai directly.`);
+      logger.info(`Gemini Imagen is in quota cooldown for ${remainingSecs}s more. Checking HuggingFace first...`);
+      
+      const hfApiKey = env.HUGGINGFACE_API_KEY || env.BFL_API_KEY;
+      const isHfPlaceholder = !hfApiKey || hfApiKey.includes('your_huggingface') || hfApiKey.includes('your_bfl') || hfApiKey.includes('hf_mock');
+      if (!isHfPlaceholder) {
+        try {
+          logger.info(`Attempting image generation via HuggingFace FLUX.1-schnell...`);
+          return await generateImageViaHuggingFace(enhancedPrompt, hfApiKey!);
+        } catch (hfErr: any) {
+          logger.warn(`HuggingFace FLUX generation failed (${hfErr.message}). Falling back to Pollinations.ai...`);
+        }
+      }
       return await downloadFileToBuffer(pollinationsUrl);
     }
 
@@ -274,10 +327,24 @@ export class GeminiProvider implements IAiProvider {
         imagenQuotaResetAt = Date.now() + delaySecs * 1000;
         logger.warn(
           `Gemini Imagen quota exceeded. Cooldown set for ${delaySecs.toFixed(0)}s ` +
-          `(until ${new Date(imagenQuotaResetAt).toISOString()}). Falling back to Pollinations.ai...`
+          `(until ${new Date(imagenQuotaResetAt).toISOString()}).`
         );
       } else {
-        logger.warn(`Gemini Imagen failed (${errMsg}). Falling back to Pollinations.ai...`);
+        logger.warn(`Gemini Imagen failed (${errMsg}).`);
+      }
+
+      // Try HuggingFace FLUX.1-schnell first before falling back to Pollinations!
+      const hfApiKey = env.HUGGINGFACE_API_KEY || env.BFL_API_KEY;
+      const isHfPlaceholder = !hfApiKey || hfApiKey.includes('your_huggingface') || hfApiKey.includes('your_bfl') || hfApiKey.includes('hf_mock');
+      if (!isHfPlaceholder) {
+        try {
+          logger.info(`Gemini failed. Attempting image generation via HuggingFace FLUX.1-schnell...`);
+          return await generateImageViaHuggingFace(enhancedPrompt, hfApiKey!);
+        } catch (hfErr: any) {
+          logger.warn(`HuggingFace FLUX generation failed (${hfErr.message}). Falling back to Pollinations.ai...`);
+        }
+      } else {
+        logger.info(`HuggingFace API Key is not configured. Falling back directly to Pollinations.ai...`);
       }
 
       return await downloadFileToBuffer(pollinationsUrl);

@@ -23,56 +23,40 @@ function downloadFileToBuffer(url: string): Promise<Buffer> {
   });
 }
 
-function generateImageViaGemini(prompt: string, apiKey: string): Promise<Buffer> {
+function generateImageViaHuggingFace(prompt: string, apiKey: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const postData = JSON.stringify({
-      contents: [
-        {
-          parts: [
-            {
-              text: prompt,
-            },
-          ],
-        },
-      ],
-      generationConfig: {
-        responseModalalities: ['IMAGE'],
-      },
+      inputs: prompt,
     });
 
     const options = {
-      hostname: 'generativelanguage.googleapis.com',
-      path: '/v1beta/models/gemini-3.1-flash-image:generateContent',
+      hostname: 'api-inference.huggingface.co',
+      path: '/models/black-forest-labs/FLUX.1-schnell',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
+        'Authorization': `Bearer ${apiKey}`,
       },
+      timeout: 30000,
     };
 
     const req = https.request(options, (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => {
-        const body = Buffer.concat(chunks).toString('utf-8');
+        const buffer = Buffer.concat(chunks);
         if (res.statusCode && res.statusCode >= 400) {
+          const body = buffer.toString('utf-8');
           return reject(new Error(`HTTP ${res.statusCode}: ${body}`));
         }
-        try {
-          const parsed = JSON.parse(body);
-          const parts = parsed?.candidates?.[0]?.content?.parts;
-          const imagePart = parts?.find((p: any) => p.inlineData);
-          const base64Bytes = imagePart?.inlineData?.data;
-          
-          if (!base64Bytes) {
-            return reject(new Error(`No image bytes in response: ${body}`));
-          }
-          resolve(Buffer.from(base64Bytes, 'base64'));
-        } catch (e: any) {
-          reject(e);
-        }
+        resolve(buffer);
       });
       res.on('error', reject);
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Hugging Face API request timed out'));
     });
 
     req.on('error', reject);
@@ -166,21 +150,23 @@ export class HuggingFaceProvider implements IAiProvider {
   }
 
   async generateImage(prompt: string): Promise<Buffer> {
-    // Hugging Face has image models, but we redirect to Gemini/Pollinations for consistency
     const enhancedPrompt = `${prompt.trim()}, 8k resolution, highly detailed, cinematic lighting, photorealistic, clean composition, professional digital art, masterpiece`;
+    const hfApiKey = env.HUGGINGFACE_API_KEY || env.BFL_API_KEY;
+    const isHfPlaceholder = !hfApiKey || hfApiKey.includes('your_huggingface') || hfApiKey.includes('your_bfl') || hfApiKey.includes('hf_mock');
     
-    try {
-      if (env.GEMINI_API_KEY) {
-        logger.info(`HuggingFace Provider redirecting image generation request to Gemini Imagen...`);
-        return await generateImageViaGemini(enhancedPrompt, env.GEMINI_API_KEY);
-      } else {
-        throw new Error('GEMINI_API_KEY is not configured');
+    if (!isHfPlaceholder) {
+      try {
+        logger.info(`HuggingFace Provider generating image via FLUX.1-schnell Serverless Inference...`);
+        return await generateImageViaHuggingFace(enhancedPrompt, hfApiKey!);
+      } catch (err: any) {
+        logger.warn(`HuggingFace FLUX generation failed (${err.message}). Falling back to Pollinations.ai...`);
       }
-    } catch (err: any) {
-      logger.warn(`Gemini Imagen fallback inside HuggingFace failed (${err.message}). Falling back to Pollinations.ai...`);
-      const encodedPrompt = encodeURIComponent(enhancedPrompt);
-      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true&model=flux&enhance=true`;
-      return await downloadFileToBuffer(imageUrl);
+    } else {
+      logger.info(`HuggingFace API Key is not configured. Falling back to Pollinations.ai...`);
     }
+
+    const encodedPrompt = encodeURIComponent(enhancedPrompt);
+    const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true&model=flux&enhance=true`;
+    return await downloadFileToBuffer(imageUrl);
   }
 }
