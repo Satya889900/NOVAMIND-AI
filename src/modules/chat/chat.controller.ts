@@ -19,6 +19,7 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
+  logger.info(`[debug] sendMessage req.body: ${JSON.stringify(req.body)}`);
   const { content, type, fileUrl, fileName, model: requestedModel } = req.body;
   const roomId = req.params.roomId;
   const userId = req.user.id;
@@ -71,9 +72,10 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
 
   // 3. Auto-generate AI reply (always, for all messages)
   let aiReply = null;
+  let botUserId = '';
 
   try {
-    const botUserId = await aiService.ensureBotUser();
+    botUserId = await aiService.ensureBotUser();
     const conversation = await Conversation.findById(roomId).lean();
 
     if (conversation) {
@@ -178,6 +180,43 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
   } catch (error: any) {
     logger.error(`AI auto-reply failed: ${error.message}`);
     // Don't fail the entire request — user's message is already saved
+    // Create a message from the bot detailing the error so the user has immediate feedback!
+    try {
+      if (!botUserId) {
+        botUserId = await aiService.ensureBotUser();
+      }
+      let friendlyError = `An error occurred while generating the AI response: ${error.message}`;
+      const errMsg = error.message.toLowerCase();
+      
+      if (
+        errMsg.includes('insufficient balance') || 
+        errMsg.includes('insufficient_funds') || 
+        errMsg.includes('balance') || 
+        errMsg.includes('credit') ||
+        errMsg.includes('402') ||
+        errMsg.includes('payment') ||
+        errMsg.includes('billing') ||
+        errMsg.includes('quota') ||
+        errMsg.includes('plan expired') ||
+        errMsg.includes('expired')
+      ) {
+        friendlyError = `⚠️ **AI API Billing Alert: Plan Expired / Insufficient Credits**\n\nYour API account balance has run out of funds, or your active subscription plan has expired. Please check your billing details or top up your balance at the model provider's developer console to continue using this model.`;
+      } else if (errMsg.includes('401') || errMsg.includes('unauthorized') || errMsg.includes('api_key') || errMsg.includes('invalid_api_key')) {
+        friendlyError = `⚠️ **AI API Error: Unauthorized / Invalid API Key (HTTP 401)**\n\nPlease check that your API keys are correctly configured in the backend environment.`;
+      }
+      
+      aiReply = await chatService.createMessage(
+        roomId,
+        botUserId,
+        friendlyError,
+        'text',
+        undefined,
+        undefined,
+        modelName
+      );
+    } catch (msgErr: any) {
+      logger.error(`Failed to create error reply message: ${msgErr.message}`);
+    }
   }
 
   // 4. Return both the user's message and the AI reply

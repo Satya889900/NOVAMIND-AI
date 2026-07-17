@@ -243,10 +243,7 @@ export const aiService = {
       };
     } catch (error: any) {
       logger.error(`AI model invocation failed: ${error.message}`);
-      return {
-        content: `I'm sorry, the AI service encountered an error. Please try again.`,
-        type: 'text',
-      };
+      throw error;
     }
   },
 

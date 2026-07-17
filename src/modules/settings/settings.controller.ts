@@ -8,6 +8,9 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
   const isMockGroq = !env.GROQ_API_KEY || env.GROQ_API_KEY.includes('mock') || env.GROQ_API_KEY.includes('your_groq');
   const isMockHF = !env.HUGGINGFACE_API_KEY || env.HUGGINGFACE_API_KEY.includes('mock') || env.HUGGINGFACE_API_KEY.includes('your_huggingface');
   const isMockBFL = !env.BFL_API_KEY || env.BFL_API_KEY.includes('mock') || env.BFL_API_KEY.includes('your_bfl');
+  const isMockDeepSeek = !env.DEEPSEEK_API_KEY || env.DEEPSEEK_API_KEY.includes('mock') || env.DEEPSEEK_API_KEY.includes('your_deepseek');
+  const isMockOpenRouter = !env.OPENROUTER_API_KEY || env.OPENROUTER_API_KEY.includes('mock') || env.OPENROUTER_API_KEY.includes('your_openrouter');
+  const isMockOpenAi = !env.OPENAI_API_KEY || env.OPENAI_API_KEY.includes('mock') || env.OPENAI_API_KEY.includes('your_openai');
 
   return sendSuccess(res, 'AI Provider status retrieved', {
     providers: [
@@ -18,6 +21,15 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
         models: [
           { id: 'gemini-3.1-flash-lite', name: 'Gemini 2.5 Flash', badge: 'Fast & Efficient', description: 'Speed-optimized with broad reasoning capabilities.' },
           { id: 'gemini-3.5-flash',      name: 'Gemini 2.5 Pro',   badge: 'Advanced Logic',   description: 'Best for coding, math, and complex reasoning.' },
+        ],
+      },
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        configured: !isMockOpenAi,
+        models: [
+          { id: 'gpt-4o-mini', name: 'GPT-4o Mini', badge: 'Ultra Fast', description: 'OpenAI\'s cost-efficient, high-speed lightweight model.' },
+          { id: 'gpt-4o',      name: 'GPT-4o',      badge: 'Advanced Logic',   description: 'OpenAI\'s flagship high-intelligence model for complex tasks.' },
         ],
       },
       {
@@ -34,8 +46,25 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
         configured: !isMockHF,
         models: [
           { id: 'Qwen/Qwen2.5-7B-Instruct', name: 'Qwen 2.5 · 7B', badge: 'Ultra Fast', description: "Alibaba's speed-optimized 7B open-source model. Responds in under 1 second." },
-          { id: 'deepseek-ai/DeepSeek-R1', name: 'DeepSeek R1', badge: 'Reasoning', description: 'DeepSeek R1 reasoning model (Turbo). Excellent at math, coding, and logical thinking.' },
-          { id: 'deepseek-ai/DeepSeek-V3', name: 'DeepSeek V3', badge: 'Intelligence', description: 'DeepSeek V3 model (Turbo). High performance general reasoning and conversation.' },
+        ],
+      },
+      {
+        id: 'deepseek',
+        name: 'DeepSeek AI',
+        configured: !isMockDeepSeek,
+        models: [
+          { id: 'deepseek-chat', name: 'DeepSeek V3', badge: 'Intelligence', description: 'DeepSeek V3 model (Turbo). High performance general reasoning and conversation.' },
+          { id: 'deepseek-reasoner', name: 'DeepSeek R1', badge: 'Reasoning', description: 'DeepSeek R1 reasoning model (Turbo). Excellent at math, coding, and logical thinking.' },
+        ],
+      },
+      {
+        id: 'openrouter',
+        name: 'OpenRouter AI',
+        configured: !isMockOpenRouter,
+        models: [
+          { id: 'openrouter/meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 · 70B (OR)', badge: 'Reasoning', description: 'Meta 70B parameter model optimized for conversational reasoning via OpenRouter.' },
+          { id: 'openrouter/deepseek/deepseek-r1', name: 'DeepSeek R1 (OR)', badge: 'Deep Reasoning', description: 'DeepSeek R1 reasoning model (Turbo). Excellent at math, coding, and logical thinking via OpenRouter.' },
+          { id: 'openrouter/google/gemini-2.5-flash', name: 'Gemini 2.5 Flash (OR)', badge: 'Fast & Efficient', description: 'Google Gemini 2.5 Flash model through OpenRouter.' },
         ],
       },
       {
