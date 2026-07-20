@@ -156,6 +156,141 @@ export class GroqProvider implements IAiProvider {
     }
   }
 
+  async *streamResponse(prompt: string, options?: ProviderChatOptions): AsyncIterable<string> {
+    const apiKey = env.GROQ_API_KEY;
+    const isMockKey = !apiKey || apiKey.includes('your_groq_api_key') || apiKey.includes('gsk_mock_groq_api_key');
+
+    if (isMockKey) {
+      yield `[MOCK RESPONSE] This is a simulated streaming response from NovaMind AI via the Groq Provider. To activate real answers, configure GROQ_API_KEY. Received prompt: "${prompt}"`;
+      return;
+    }
+
+    const temperature = options?.temperature !== undefined ? options.temperature : 0.8;
+    const maxOutputTokens = options?.maxTokens !== undefined ? options.maxTokens : 2048;
+    
+    let modelId = options?.model || 'llama-3.3-70b-versatile';
+    if (modelId === 'groq-llama' || modelId === 'llama') {
+      modelId = 'llama-3.3-70b-versatile';
+    }
+
+    const messages: { role: string; content: string }[] = [];
+    if (options?.history && options.history.length > 0) {
+      options.history.forEach((msg) => {
+        messages.push({
+          role: msg.role === 'user' ? 'user' : msg.role === 'system' ? 'system' : 'assistant',
+          content: msg.content,
+        });
+      });
+    }
+
+    let finalPrompt = prompt;
+    if (options?.imageAttachment) {
+      finalPrompt = `[User uploaded an image attachment (${options.imageAttachment.mimeType})] ${prompt}`;
+    }
+    messages.push({ role: 'user', content: finalPrompt });
+
+    const postData = JSON.stringify({
+      model: modelId,
+      messages,
+      temperature,
+      max_tokens: maxOutputTokens,
+      stream: true,
+    });
+
+    const queue: string[] = [];
+    let isDone = false;
+    let errorToThrow: Error | null = null;
+    let resolveNext: (() => void) | null = null;
+
+    const req = https.request({
+      hostname: 'api.groq.com',
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+    }, (res) => {
+      if (res.statusCode && res.statusCode >= 400) {
+        let body = '';
+        res.on('data', chunk => body += chunk);
+        res.on('end', () => {
+          errorToThrow = new Error(`Groq API returned HTTP ${res.statusCode}: ${body}`);
+          isDone = true;
+          if (resolveNext) resolveNext();
+        });
+        return;
+      }
+
+      let buffer = '';
+      res.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString('utf-8');
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // save incomplete line
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          if (trimmed === 'data: [DONE]') {
+            isDone = true;
+            if (resolveNext) resolveNext();
+            continue;
+          }
+
+          if (trimmed.startsWith('data: ')) {
+            try {
+              const dataStr = trimmed.slice(6);
+              const parsed = JSON.parse(dataStr);
+              const content = parsed?.choices?.[0]?.delta?.content;
+              if (content) {
+                queue.push(content);
+                if (resolveNext) {
+                  resolveNext();
+                  resolveNext = null;
+                }
+              }
+            } catch (e) {
+              // Ignore parse errors on half-received lines
+            }
+          }
+        }
+      });
+
+      res.on('end', () => {
+        isDone = true;
+        if (resolveNext) resolveNext();
+      });
+
+      res.on('error', (err) => {
+        errorToThrow = err;
+        isDone = true;
+        if (resolveNext) resolveNext();
+      });
+    });
+
+    req.on('error', (err) => {
+      errorToThrow = err;
+      isDone = true;
+      if (resolveNext) resolveNext();
+    });
+
+    req.write(postData);
+    req.end();
+
+    while (true) {
+      if (queue.length > 0) {
+        yield queue.shift()!;
+      } else if (isDone) {
+        if (errorToThrow) throw errorToThrow;
+        break;
+      } else {
+        await new Promise<void>((resolve) => {
+          resolveNext = resolve;
+        });
+      }
+    }
+  }
+
   async generateTitle(firstMessage: string): Promise<string> {
     const prompt = `Generate a very short chat title (3-5 words max) summarizing this message. No quotes, no punctuation at end.\n\nMessage: "${firstMessage}"\n\nTitle:`;
     try {

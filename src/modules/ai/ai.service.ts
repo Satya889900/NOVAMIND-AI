@@ -16,7 +16,7 @@ export interface AiResponse {
   fileName?: string;
 }
 
-function downloadFileToBuffer(url: string): Promise<Buffer> {
+export function downloadFileToBuffer(url: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https') ? https : http;
     const req = client.get(url, (res) => {

@@ -94,10 +94,101 @@ function callBflEndpoint(path: string, method: string, apiKey: string, bodyText?
   });
 }
 
-/**
- * Session-level flag: set to true after BFL returns a 422 Invalid API Key.
- * Prevents wasting a round-trip on every image request when the key is known-bad.
- */
+function generateImageViaCloudflare(prompt: string, accountId: string, apiToken: string, modelId: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const postData = JSON.stringify({
+      prompt,
+    });
+
+    const options = {
+      hostname: 'api.cloudflare.com',
+      path: `/client/v4/accounts/${accountId}/ai/run/${modelId}`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiToken}`,
+      },
+      timeout: 25000,
+    };
+
+    const req = https.request(options, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const buffer = Buffer.concat(chunks);
+        if (res.statusCode && res.statusCode >= 400) {
+          const body = buffer.toString('utf-8');
+          return reject(new Error(`HTTP ${res.statusCode}: ${body}`));
+        }
+
+        // Try parsing as JSON first, since Workers AI REST API returns image as Base64 wrapped in JSON
+        const contentType = res.headers['content-type'] || '';
+        const bodyText = buffer.toString('utf-8').trim();
+        if (contentType.includes('application/json') || (bodyText.startsWith('{') && bodyText.endsWith('}'))) {
+          try {
+            const parsed = JSON.parse(bodyText);
+            const base64Image = parsed?.result?.image;
+            if (base64Image) {
+              logger.info(`Successfully parsed Base64 image from Cloudflare response (${modelId})`);
+              return resolve(Buffer.from(base64Image, 'base64'));
+            }
+            if (parsed.errors && parsed.errors.length > 0) {
+              return reject(new Error(`Cloudflare error: ${JSON.stringify(parsed.errors)}`));
+            }
+          } catch (e: any) {
+            logger.warn(`Failed to parse Cloudflare response as JSON: ${e.message}`);
+          }
+        }
+
+        resolve(buffer);
+      });
+      res.on('error', reject);
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Cloudflare Workers AI image request timed out'));
+    });
+
+    req.on('error', reject);
+    req.write(postData);
+    req.end();
+  });
+}
+
+async function attemptCloudflareImageGen(prompt: string): Promise<Buffer> {
+  const cfToken = env.CLOUDFLARE_API_TOKEN;
+  const cfAccount = env.CLOUDFLARE_ACCOUNT_ID;
+  const hasCf = cfToken && !cfToken.includes('mock') && !cfToken.includes('your_') &&
+                cfAccount && !cfAccount.includes('mock') && !cfAccount.includes('your_');
+
+  if (!hasCf) {
+    throw new Error('Cloudflare is not configured');
+  }
+
+  // Cloudflare image models to try in sequence (Flux first, then fast SD, then ultra-fast LCM)
+  const models = [
+    '@cf/black-forest-labs/flux-1-schnell',
+    '@cf/stabilityai/stable-diffusion-xl-base-1.0',
+    '@cf/lykon/dreamshaper-8-lcm',
+  ];
+
+  let lastError: any = null;
+  for (const modelId of models) {
+    try {
+      logger.info(`Attempting Cloudflare Workers AI image generation via model ${modelId}...`);
+      const buffer = await generateImageViaCloudflare(prompt, cfAccount!, cfToken!, modelId);
+      logger.info(`Successfully generated image using Cloudflare Workers AI (${modelId})!`);
+      return buffer;
+    } catch (err: any) {
+      lastError = err;
+      logger.warn(`Cloudflare model ${modelId} failed: ${err.message || err}`);
+    }
+  }
+
+  throw lastError || new Error('All Cloudflare image models failed');
+}
+
 let bflKeyInvalid = false;
 
 export class BlackForestLabsProvider implements IAiProvider {
@@ -122,9 +213,14 @@ export class BlackForestLabsProvider implements IAiProvider {
 
     if (isMockKey || bflKeyInvalid) {
       if (bflKeyInvalid) {
-        logger.info('BFL API key is invalid — skipping BFL, using Pollinations.ai directly.');
+        logger.info('BFL API key is invalid — checking Cloudflare Workers AI fallback...');
       } else {
-        logger.info('Black Forest Labs API Key is not configured. Falling back to free Pollinations.ai (Flux) image generator...');
+        logger.info('Black Forest Labs API Key is not configured. checking Cloudflare Workers AI fallback...');
+      }
+      try {
+        return await attemptCloudflareImageGen(enhancedPrompt);
+      } catch (cfErr: any) {
+        logger.warn(`Cloudflare fallback failed (${cfErr.message}). Falling back to free Pollinations.ai...`);
       }
       const encodedPrompt = encodeURIComponent(enhancedPrompt);
       const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true&model=flux&enhance=true`;
@@ -179,7 +275,12 @@ export class BlackForestLabsProvider implements IAiProvider {
         bflKeyInvalid = true;
         logger.warn('BFL API key is invalid (422). All future requests this session will skip BFL entirely.');
       } else {
-        logger.warn(`Black Forest Labs API request failed (${err.message}). Falling back to Pollinations.ai...`);
+        logger.warn(`Black Forest Labs API request failed (${err.message}). Checking Cloudflare Workers AI fallback...`);
+      }
+      try {
+        return await attemptCloudflareImageGen(enhancedPrompt);
+      } catch (cfErr: any) {
+        logger.warn(`Cloudflare fallback failed (${cfErr.message}). Falling back to Pollinations.ai...`);
       }
       const encodedPrompt = encodeURIComponent(enhancedPrompt);
       const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true&model=flux&enhance=true`;

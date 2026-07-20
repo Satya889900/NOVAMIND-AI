@@ -22,7 +22,7 @@ export interface ProviderChatOptions {
 export interface IAiProvider {
   name: string;
   generateResponse(prompt: string, options?: ProviderChatOptions): Promise<string>;
-  streamResponse?(prompt: string, options?: ProviderChatOptions): Promise<any>;
+  streamResponse?(prompt: string, options?: ProviderChatOptions): AsyncIterable<string>;
   generateTitle(firstMessage: string): Promise<string>;
   generateImage?(prompt: string): Promise<Buffer>;
 }

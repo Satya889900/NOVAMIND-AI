@@ -11,7 +11,19 @@ import apiRouter from './routes/index';
 const app = express();
 
 // Security Headers
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+        'img-src': ["'self'", 'data:', 'https:', 'http:'],
+        'media-src': ["'self'", 'data:', 'https:', 'http:'],
+        'connect-src': ["'self'", 'https:', 'http:', 'wss:', 'ws:'],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+  })
+);
 
 // CORS config
 app.use(cors(corsOptions));

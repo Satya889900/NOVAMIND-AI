@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { chatService } from './chat.service';
-import { aiService } from '../ai/ai.service';
+import { aiService, downloadFileToBuffer } from '../ai/ai.service';
 import { ProviderFactory } from '../ai/providers/provider.factory';
 import { sendSuccess } from '../../utils/response';
 import { asyncHandler } from '../../utils/asyncHandler';
@@ -266,4 +266,348 @@ export const uploadChatAttachment = asyncHandler(async (req: Request, res: Respo
     fileType: mimetype,
     fileSize: size,
   });
+});
+
+export const streamMessage = asyncHandler(async (req: Request, res: Response) => {
+  logger.info(`[debug] streamMessage req.body: ${JSON.stringify(req.body)}`);
+  const { content, type, fileUrl, fileName, model: requestedModel } = req.body;
+  const roomId = req.params.roomId;
+  const userId = req.user.id;
+
+  // 1. Set up SSE Headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Content-Encoding', 'none'); // bypass compression middleware buffering
+
+  // 2. Save user message to database
+  const userMessage = await chatService.createMessage(
+    roomId,
+    userId,
+    content,
+    type,
+    fileUrl,
+    fileName
+  );
+
+
+
+  // Fetch or create user settings
+  let userSettings = await Settings.findOne({ userId });
+  if (!userSettings) {
+    userSettings = await Settings.create({
+      userId,
+      theme: 'system',
+      notificationsEnabled: true,
+      systemInstructions: 'You are NovaMind AI, a helpful AI assistant.',
+      defaultModel: 'gemini-3.1-flash-lite',
+      temperature: 0.8,
+      maxTokens: 2048,
+    });
+  }
+
+  const modelName = requestedModel || userSettings.defaultModel;
+  const temperature = userSettings.temperature;
+  const maxTokens = userSettings.maxTokens;
+
+  // Title generation for first message
+  const existingMessageCount = await Message.countDocuments({ conversationId: roomId });
+  if (existingMessageCount === 1) { // userMessage is the first one
+    aiService.generateTitle(content, modelName).then(async (title) => {
+      const conv = await Conversation.findById(roomId);
+      if (conv && (!conv.name || conv.name === 'New Chat')) {
+        await chatService.renameConversation(roomId, title);
+        logger.info(`AI-generated title for conversation ${roomId}: "${title}"`);
+        const io = req.app.get('io');
+        if (io) {
+          io.to(roomId).emit('room_renamed', { roomId, name: title });
+        }
+      }
+    }).catch((err) => {
+      logger.error(`Title generation failed: ${err.message}`);
+    });
+  }
+
+  let botUserId = '';
+  try {
+    botUserId = await aiService.ensureBotUser();
+    const conversation = await Conversation.findById(roomId).lean();
+
+    if (!conversation) {
+      throw new Error('Conversation not found');
+    }
+
+    // Auto-add bot participant
+    const botIsParticipant = (conversation.participants as any[]).some(
+      (p: any) => p.toString() === botUserId
+    );
+    if (!botIsParticipant) {
+      await Conversation.findByIdAndUpdate(roomId, {
+        $addToSet: { participants: botUserId },
+      });
+    }
+
+    // Handle streaming based on model type
+    if (conversation.documentId) {
+      // Document QA/RAG (doesn't stream tokens natively, return complete block)
+      res.write(`data: ${JSON.stringify({ token: "🔍 Searching document and generating answer...\n\n" })}\n\n`);
+      const answer = await ragService.answerQuestion(content, conversation.documentId.toString());
+      res.write(`data: ${JSON.stringify({ token: answer })}\n\n`);
+      
+      const aiReply = await chatService.createMessage(
+        roomId,
+        botUserId,
+        answer,
+        'text',
+        undefined,
+        undefined,
+        modelName
+      );
+
+
+
+      res.write(`data: ${JSON.stringify({ done: true, message: aiReply, userMessage })}\n\n`);
+      res.end();
+      return;
+    } else if (modelName.toLowerCase().includes('flux')) {
+      // FLUX Image Gen
+      res.write(`data: ${JSON.stringify({ token: "🎨 Generating image using FLUX.1 Schnell..." })}\n\n`);
+      
+      const provider = ProviderFactory.getProvider(modelName);
+      const imageBuffer = await provider.generateImage!(content);
+      const cloudResult = await uploadToCloudinary(imageBuffer, 'generated_image.png', 'novamind/ai_generated');
+
+      try {
+        await Document.create({
+          userId: userId,
+          conversationId: roomId,
+          fileName: cloudResult.public_id.split('/').pop() || 'flux_generated_image.png',
+          originalName: `Generated: ${content.substring(0, 30)}.png`,
+          fileType: 'image/png',
+          fileSize: imageBuffer.length,
+          storagePath: cloudResult.secure_url,
+          cloudinaryPublicId: cloudResult.public_id,
+          status: 'Ready',
+        });
+      } catch (docErr: any) {
+        logger.error(`Failed to save generated image to Document schema: ${docErr.message}`);
+      }
+
+      const textResponse = `Here is your generated image for prompt: "${content}"`;
+      
+      const aiReply = await chatService.createMessage(
+        roomId,
+        botUserId,
+        textResponse,
+        'image',
+        cloudResult.secure_url,
+        'flux_generated_image.png',
+        modelName
+      );
+
+
+
+      res.write(`data: ${JSON.stringify({ done: true, message: aiReply, userMessage })}\n\n`);
+      res.end();
+      return;
+    } else {
+      // Standard Text AI Model Streaming
+      const provider = ProviderFactory.getProvider(modelName);
+      if (!provider.streamResponse) {
+        throw new Error(`Streaming is not supported for provider: ${provider.name}`);
+      }
+
+      // Load recent message history from DB for conversation context
+      const dbHistory = await Message.find({ conversationId: roomId })
+        .sort({ createdAt: 1 })
+        .limit(30)
+        .lean();
+
+      // Convert history format
+      const providerHistory = dbHistory.map(msg => ({
+        role: msg.senderId.toString() === botUserId ? 'assistant' as const : 'user' as const,
+        content: msg.content,
+      }));
+
+      // Exclude last user message just saved
+      if (providerHistory.length > 0) {
+        providerHistory.pop();
+      }
+
+      let imageAttachment: any = undefined;
+      if (type === 'image' && fileUrl) {
+        try {
+          const buffer = await downloadFileToBuffer(fileUrl);
+          imageAttachment = {
+            mimeType: 'image/png',
+            data: buffer.toString('base64'),
+          };
+        } catch (e: any) {
+          logger.warn(`Failed to fetch image attachment for stream: ${e.message}`);
+        }
+      }
+
+      const stream = provider.streamResponse(content, {
+        model: modelName,
+        temperature,
+        maxTokens,
+        history: providerHistory,
+        imageAttachment,
+      });
+
+      let fullContent = '';
+      for await (const chunk of stream) {
+        fullContent += chunk;
+        // Don't flush tokens yet — we need to check if the full
+        // response is a JSON image-generation action first.
+        // We buffer everything and decide after the stream ends.
+      }
+
+      // ── Detect JSON image-generation action in the streamed response ──
+      // The AI may respond with {"action":"generate_image","prompt":"..."}
+      // regardless of which text model is selected (Qwen, Llama, etc.).
+      // We handle this exactly the same way as sendMessage does.
+      const trimmedFull = fullContent.trim();
+      const isJsonImageAction =
+        trimmedFull.startsWith('{') && trimmedFull.endsWith('}') &&
+        (trimmedFull.includes('"generate_image"') || trimmedFull.includes('"dalle.text2im"'));
+
+      if (isJsonImageAction) {
+        try {
+          const parsed = JSON.parse(trimmedFull);
+          const isGenerateAction =
+            parsed.action === 'generate_image' || parsed.action === 'dalle.text2im';
+
+          if (isGenerateAction) {
+            let promptText = '';
+            if (parsed.prompt) {
+              promptText = parsed.prompt;
+            } else if (parsed.action_input) {
+              if (typeof parsed.action_input === 'string') {
+                try {
+                  const sub = JSON.parse(parsed.action_input);
+                  promptText = sub.prompt || parsed.action_input;
+                } catch { promptText = parsed.action_input; }
+              } else if (typeof parsed.action_input === 'object') {
+                promptText = parsed.action_input.prompt || '';
+              }
+            }
+
+            if (promptText) {
+              logger.info(`[stream] AI requested image generation for prompt: ${promptText}`);
+
+              // Notify the client we're now generating an image (triggers shimmer on frontend)
+              res.write(`data: ${JSON.stringify({ token: 'Generating image using FLUX' })}\n\n`);
+
+              // Generate image via the FLUX/Gemini provider
+              const imgProvider = ProviderFactory.getProvider('gemini-3.1-flash-lite');
+              const imageBuffer = await imgProvider.generateImage!(promptText);
+              const cloudResult = await uploadToCloudinary(imageBuffer, 'generated_image.png', 'novamind/ai_generated');
+
+              // Persist to Document collection
+              try {
+                await Document.create({
+                  userId,
+                  conversationId: roomId,
+                  fileName: cloudResult.public_id.split('/').pop() || 'generated_image.png',
+                  originalName: `Generated: ${promptText.substring(0, 30)}.png`,
+                  fileType: 'image/png',
+                  fileSize: imageBuffer.length,
+                  storagePath: cloudResult.secure_url,
+                  cloudinaryPublicId: cloudResult.public_id,
+                  status: 'Ready',
+                });
+              } catch (docErr: any) {
+                logger.error(`Failed to save AI-generated image to Document: ${docErr.message}`);
+              }
+
+              const aiReply = await chatService.createMessage(
+                roomId,
+                botUserId,
+                promptText,
+                'image',
+                cloudResult.secure_url,
+                'generated_image.png',
+                modelName
+              );
+
+              res.write(`data: ${JSON.stringify({ done: true, message: aiReply, userMessage })}\n\n`);
+              res.end();
+              return;
+            }
+          }
+        } catch (parseErr: any) {
+          logger.warn(`[stream] Failed to parse possible JSON image action: ${parseErr.message}`);
+          // Fall through to save as normal text
+        }
+      }
+
+      // ── Normal text response: flush all buffered tokens then finish ──
+      // Now that we know it's not an image action, send tokens to the client.
+      res.write(`data: ${JSON.stringify({ token: fullContent })}\n\n`);
+
+      // Save complete response to DB
+      const aiReply = await chatService.createMessage(
+        roomId,
+        botUserId,
+        fullContent,
+        'text',
+        undefined,
+        undefined,
+        modelName
+      );
+
+      res.write(`data: ${JSON.stringify({ done: true, message: aiReply, userMessage })}\n\n`);
+      res.end();
+    }
+  } catch (error: any) {
+    logger.error(`AI streaming auto-reply failed: ${error.message}`);
+    
+    let friendlyError = `An error occurred while generating the AI response: ${error.message}`;
+    const errMsg = error.message.toLowerCase();
+    
+    if (
+      errMsg.includes('insufficient balance') || 
+      errMsg.includes('insufficient_funds') || 
+      errMsg.includes('insufficient_quota') || 
+      errMsg.includes('balance') || 
+      errMsg.includes('credit') ||
+      errMsg.includes('402') ||
+      errMsg.includes('429') ||
+      errMsg.includes('payment') ||
+      errMsg.includes('billing') ||
+      errMsg.includes('quota') ||
+      errMsg.includes('plan expired') ||
+      errMsg.includes('expired')
+    ) {
+      friendlyError = `⚠️ **AI API Billing Alert: Plan Expired / Quota Exceeded**\n\nYour API account has run out of credits or exceeded its usage quota. Please check your billing details or top up your balance at the model provider's developer console to continue using this model.`;
+    } else if (errMsg.includes('model_not_found') || errMsg.includes('model does not exist') || errMsg.includes('404')) {
+      friendlyError = `⚠️ **AI API Error: Model Not Found (HTTP 404)**\n\nThe selected model ID does not exist or you do not have access to it. Please select a different model or check your provider account permissions.`;
+    } else if (errMsg.includes('401') || errMsg.includes('unauthorized') || errMsg.includes('api_key') || errMsg.includes('invalid_api_key') || errMsg.includes('authentication error')) {
+      friendlyError = `⚠️ **AI API Error: Unauthorized / Invalid API Key (HTTP 401)**\n\nPlease check that your API keys are correctly configured in the backend environment.`;
+    }
+
+    try {
+      if (!botUserId) {
+        botUserId = await aiService.ensureBotUser();
+      }
+      
+      const aiReply = await chatService.createMessage(
+        roomId,
+        botUserId,
+        friendlyError,
+        'text',
+        undefined,
+        undefined,
+        modelName
+      );
+
+
+
+      res.write(`data: ${JSON.stringify({ error: friendlyError, message: aiReply })}\n\n`);
+    } catch (msgErr: any) {
+      logger.error(`Failed to create error reply message: ${msgErr.message}`);
+    }
+    res.end();
+  }
 });

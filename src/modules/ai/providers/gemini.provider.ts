@@ -276,6 +276,90 @@ export class GeminiProvider implements IAiProvider {
     throw new Error(`All Gemini models failed:\n${errors.join('\n')}`);
   }
 
+  async *streamResponse(prompt: string, options?: ProviderChatOptions): AsyncIterable<string> {
+    if (!aiClient) {
+      throw new Error('Gemini AI client is not initialized. Check GEMINI_API_KEY in .env');
+    }
+
+    const temperature = options?.temperature !== undefined ? options.temperature : 0.8;
+    const maxOutputTokens = options?.maxTokens !== undefined ? options.maxTokens : 2048;
+
+    // Build history
+    const history: { role: string; parts: { text: string }[] }[] = [];
+    if (options?.history && options.history.length > 0) {
+      const mappedHistory = options.history.map((msg) => ({
+        role: msg.role === 'user' ? 'user' : 'model',
+        parts: [{ text: msg.content }],
+      }));
+
+      // Alternating user/model role logic
+      for (const entry of mappedHistory) {
+        if (history.length === 0 || history[history.length - 1].role !== entry.role) {
+          history.push({ ...entry });
+        } else {
+          history[history.length - 1].parts[0].text += '\n' + entry.parts[0].text;
+        }
+      }
+    }
+
+    // Build prompt parts (with image or audio attachment if present)
+    const promptParts: any[] = [];
+    if (options?.imageAttachment) {
+      promptParts.push({
+        inlineData: {
+          mimeType: options.imageAttachment.mimeType,
+          data: options.imageAttachment.data,
+        },
+      });
+    }
+    if (options?.audioAttachment) {
+      promptParts.push({
+        inlineData: {
+          mimeType: options.audioAttachment.mimeType,
+          data: options.audioAttachment.data,
+        },
+      });
+    }
+    promptParts.push({ text: prompt });
+
+    const finalPrompt = promptParts.length > 1 ? promptParts : prompt;
+
+    // Fallback logic for streaming
+    for (const modelName of MODEL_FALLBACK_ORDER) {
+      try {
+        const model = (aiClient as GoogleGenerativeAI).getGenerativeModel({ model: modelName });
+
+        if (history.length > 0) {
+          const chat = model.startChat({
+            history,
+            generationConfig: { maxOutputTokens, temperature },
+          });
+          const resultStream = await chat.sendMessageStream(finalPrompt);
+          for await (const chunk of resultStream.stream) {
+            const chunkText = chunk.text();
+            if (chunkText) {
+              yield chunkText;
+            }
+          }
+        } else {
+          const resultStream = await model.generateContentStream(finalPrompt);
+          for await (const chunk of resultStream.stream) {
+            const chunkText = chunk.text();
+            if (chunkText) {
+              yield chunkText;
+            }
+          }
+        }
+        return; // Success, exit generator
+      } catch (err: any) {
+        logger.warn(`Gemini Model ${modelName} stream failed: ${err.message || err}`);
+        if (modelName === MODEL_FALLBACK_ORDER[MODEL_FALLBACK_ORDER.length - 1]) {
+          throw err;
+        }
+      }
+    }
+  }
+
   async generateTitle(firstMessage: string): Promise<string> {
     const prompt = `Generate a very short chat title (3-5 words max) summarizing this message. No quotes, no punctuation at end.\n\nMessage: "${firstMessage}"\n\nTitle:`;
     try {

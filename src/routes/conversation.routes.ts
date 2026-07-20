@@ -3,7 +3,7 @@ import { getRooms, createRoom, getRoomById, renameRoom, deleteRoom } from '../mo
 import { validate } from '../middleware/validate';
 import { createConversationSchema, renameConversationSchema } from '../validators/conversation.validator';
 import { protect } from '../middleware/auth';
-import { getMessages, sendMessage } from '../modules/chat/chat.controller';
+import { getMessages, sendMessage, streamMessage } from '../modules/chat/chat.controller';
 import { sendMessageSchema } from '../validators/chat.validator';
 
 const router = Router();
@@ -19,5 +19,6 @@ router.delete('/:id', deleteRoom);
 // Message routes under conversation namespace
 router.get('/:roomId/messages', getMessages);
 router.post('/:roomId/messages', validate(sendMessageSchema), sendMessage);
+router.post('/:roomId/messages/stream', validate(sendMessageSchema), streamMessage);
 
 export const conversationRouter = router;
