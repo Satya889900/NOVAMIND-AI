@@ -8,10 +8,6 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
   const isMockGroq = !env.GROQ_API_KEY || env.GROQ_API_KEY.includes('mock') || env.GROQ_API_KEY.includes('your_groq');
   const isMockHF = !env.HUGGINGFACE_API_KEY || env.HUGGINGFACE_API_KEY.includes('mock') || env.HUGGINGFACE_API_KEY.includes('your_huggingface');
   const isMockBFL = !env.BFL_API_KEY || env.BFL_API_KEY.includes('mock') || env.BFL_API_KEY.includes('your_bfl');
-  const isMockDeepSeek = !env.DEEPSEEK_API_KEY || env.DEEPSEEK_API_KEY.includes('mock') || env.DEEPSEEK_API_KEY.includes('your_deepseek');
-  const isMockOpenRouter = !env.OPENROUTER_API_KEY || env.OPENROUTER_API_KEY.includes('mock') || env.OPENROUTER_API_KEY.includes('your_openrouter');
-  const isMockOpenAi = !env.OPENAI_API_KEY || env.OPENAI_API_KEY.includes('mock') || env.OPENAI_API_KEY.includes('your_openai');
-  const isMockCerebras = !env.CEREBRAS_API_KEY || env.CEREBRAS_API_KEY.includes('mock') || env.CEREBRAS_API_KEY.includes('your_cerebras');
   const isMockCloudflare = !env.CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_API_TOKEN.includes('your_cloudflare') || env.CLOUDFLARE_API_TOKEN.includes('mock') || !env.CLOUDFLARE_ACCOUNT_ID || env.CLOUDFLARE_ACCOUNT_ID.includes('your_cloudflare');
 
   return sendSuccess(res, 'AI Provider status retrieved', {
@@ -23,15 +19,6 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
         models: [
           { id: 'gemini-3.1-flash-lite', name: 'Gemini 2.5 Flash', badge: 'Fast & Efficient', description: 'Speed-optimized with broad reasoning capabilities.' },
           { id: 'gemini-3.5-flash',      name: 'Gemini 2.5 Pro',   badge: 'Advanced Logic',   description: 'Best for coding, math, and complex reasoning.' },
-        ],
-      },
-      {
-        id: 'openai',
-        name: 'OpenAI',
-        configured: !isMockOpenAi,
-        models: [
-          { id: 'gpt-4o-mini', name: 'GPT-4o Mini', badge: 'Ultra Fast', description: 'OpenAI\'s cost-efficient, high-speed lightweight model.' },
-          { id: 'gpt-4o',      name: 'GPT-4o',      badge: 'Advanced Logic',   description: 'OpenAI\'s flagship high-intelligence model for complex tasks.' },
         ],
       },
       {
@@ -51,40 +38,12 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
         ],
       },
       {
-        id: 'deepseek',
-        name: 'DeepSeek AI',
-        configured: !isMockDeepSeek,
-        models: [
-          { id: 'deepseek-chat', name: 'DeepSeek V3', badge: 'Intelligence', description: 'DeepSeek V3 model (Turbo). High performance general reasoning and conversation.' },
-          { id: 'deepseek-reasoner', name: 'DeepSeek R1', badge: 'Reasoning', description: 'DeepSeek R1 reasoning model (Turbo). Excellent at math, coding, and logical thinking.' },
-        ],
-      },
-      {
-        id: 'cerebras',
-        name: 'Cerebras AI',
-        configured: true,
-        models: [
-          { id: 'cerebras/llama3.1-8b',    name: 'Llama 3.1 · 8B (Cerebras)',  badge: 'Ultra Fast',    description: 'Cerebras-hosted Llama 3.1 8B running at 1000+ tokens/sec.' },
-          { id: 'cerebras/llama-3.3-70b',  name: 'Llama 3.3 · 70B (Cerebras)', badge: 'Advanced Logic', description: 'Cerebras-hosted Llama 3.3 70B — best quality with blazing fast inference.' },
-          { id: 'cerebras/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout · 17B (Cerebras)', badge: 'Latest',  description: 'Meta Llama 4 Scout 17B — newest Cerebras model with 16 experts MoE architecture.' },
-        ],
-      },
-      {
         id: 'cloudflare',
         name: 'Cloudflare Workers AI',
         configured: true,
         models: [
           { id: 'cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast', name: 'Llama 3.3 · 70B (CF)', badge: 'Best Overall', description: 'Meta Llama 3.3 70B FP8 Fast — best quality model for chat, coding & assistant tasks on Cloudflare edge.' },
-        ],
-      },
-      {
-        id: 'openrouter',
-        name: 'OpenRouter AI',
-        configured: !isMockOpenRouter,
-        models: [
-          { id: 'openrouter/meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 · 70B (OR)', badge: 'Reasoning', description: 'Meta 70B parameter model optimized for conversational reasoning via OpenRouter.' },
-          { id: 'openrouter/deepseek/deepseek-r1', name: 'DeepSeek R1 (OR)', badge: 'Deep Reasoning', description: 'DeepSeek R1 reasoning model (Turbo). Excellent at math, coding, and logical thinking via OpenRouter.' },
-          { id: 'openrouter/google/gemini-2.5-flash', name: 'Gemini 2.5 Flash (OR)', badge: 'Fast & Efficient', description: 'Google Gemini 2.5 Flash model through OpenRouter.' },
+          { id: 'cloudflare/@cf/meta/llama-3.2-3b-instruct',          name: 'Llama 3.2 · 3B (CF Fast)', badge: 'Ultra Fast',   description: 'Meta Llama 3.2 3B — extremely fast response time for chat and general queries.' },
         ],
       },
       {
