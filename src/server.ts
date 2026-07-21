@@ -8,6 +8,8 @@ import { socketConfig } from './config/socket';
 import { initializeChroma } from './config/chromadb';
 import { logger } from './config/logger';
 
+import { startDocumentWorker } from './workers/documentWorker';
+
 const server = http.createServer(app);
 
 // Initialize Socket.io Wrapper
@@ -24,9 +26,12 @@ async function startServer() {
   // 2. Sockets Setup
   initSockets(io);
 
+  // 3. Start Background Workers
+  startDocumentWorker();
+
   // 3. Listen on Port
   const PORT = env.PORT;
-  server.listen(PORT, () => {
+  server.listen(PORT, '0.0.0.0', () => {
     logger.info(`Server is running in ${env.NODE_ENV} mode on port ${PORT}`);
   });
 }

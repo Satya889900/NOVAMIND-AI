@@ -12,6 +12,34 @@ import { ApiError } from '../../utils/ApiError';
 import { uploadToCloudinary } from '../../config/multer';
 import { Settings } from '../../models/Settings';
 import { ragService } from '../rag/rag.service';
+import { aiQueueService } from '../../services/aiQueue.service';
+
+const isImageModelName = (model: string) => {
+  const m = model.toLowerCase();
+  return m.includes('flux') || m.includes('pollinations-image') || m.endsWith('-image') || m.includes('blackforest');
+};
+
+const isMultimodalModel = (model?: string) => {
+  if (!model || model.trim() === '') return true; // Default system model is Gemini Flash (Multimodal)
+  const m = model.toLowerCase();
+  return m.includes('gemini') || m.includes('google');
+};
+
+const isTextQueryForImageModel = (prompt: string) => {
+  const p = prompt.trim().toLowerCase();
+  if (/^(hi|hello|hey|greetings|hola|test|ping|who are you|what is|how do|how to|explain|write|code|tell me|translate|summarize|calculate)\b/i.test(p)) {
+    if (!/image|picture|photo|painting|drawing|illustration|sketch|render|portrait|wallpaper/i.test(p)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const isImagePromptForTextModel = (prompt: string) => {
+  const p = prompt.trim().toLowerCase();
+  return /\b(image|img|pic|picture|photo|photos|drawing|illustration|sketch|portrait|wallpaper)\b/i.test(p) ||
+         /^\s*(generate|create|draw|paint|make|render)\b/i.test(p);
+};
 
 export const getMessages = asyncHandler(async (req: Request, res: Response) => {
   const messages = await chatService.getMessagesByRoom(req.params.roomId);
@@ -124,44 +152,88 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
           content: finalAnswer,
           type: 'text' as const,
         };
-      } else if (modelName.toLowerCase().includes('flux')) {
-        const provider = ProviderFactory.getProvider(modelName);
-        logger.info(`Directly generating image via ${provider.name} provider for prompt: "${content}"`);
-        const imageBuffer = await provider.generateImage!(content);
-        
-        // Upload to Cloudinary
-        const cloudResult = await uploadToCloudinary(imageBuffer, 'generated_image.png', 'novamind/ai_generated');
-        
-        // Also save in the Document collection so it shows up in the Documents page
-        try {
-          await Document.create({
-            userId: userId,
-            conversationId: roomId,
-            fileName: cloudResult.public_id.split('/').pop() || 'flux_generated_image.png',
-            originalName: `Generated: ${content.substring(0, 30)}.png`,
-            fileType: 'image/png',
-            fileSize: imageBuffer.length,
-            storagePath: cloudResult.secure_url,
-            cloudinaryPublicId: cloudResult.public_id,
-            status: 'Ready',
-          });
-        } catch (docErr: any) {
-          logger.error(`Failed to save generated image to Document schema: ${docErr.message}`);
-        }
+      } else if (isImageModelName(modelName)) {
+        if (isTextQueryForImageModel(content)) {
+          aiResponse = {
+            content: `🎨 **Image Model Notice**: You are currently using **${modelName}**, which is an **Image Generation Model** designed for visual descriptions (e.g., *"A futuristic cyberpunk city at sunset"*).\n\nTo ask questions, write text, or chat, please select a **Text Generation Model** (such as Gemini or Llama 3.3) from the model selector.`,
+            type: 'text' as const,
+          };
+        } else {
+          const provider = ProviderFactory.getProvider(modelName);
+          logger.info(`Directly generating image via ${provider.name} provider for prompt: "${content}"`);
+          const imageBuffer = await provider.generateImage!(content);
+          
+          // Upload to Cloudinary
+          const cloudResult = await uploadToCloudinary(imageBuffer, 'generated_image.png', 'novamind/ai_generated');
+          
+          // Also save in the Document collection so it shows up in the Documents page
+          try {
+            await Document.create({
+              userId: userId,
+              conversationId: roomId,
+              fileName: cloudResult.public_id.split('/').pop() || 'generated_image.png',
+              originalName: `Generated: ${content.substring(0, 30)}.png`,
+              fileType: 'image/png',
+              fileSize: imageBuffer.length,
+              storagePath: cloudResult.secure_url,
+              cloudinaryPublicId: cloudResult.public_id,
+              status: 'Ready',
+            });
+          } catch (docErr: any) {
+            logger.error(`Failed to save generated image to Document schema: ${docErr.message}`);
+          }
 
-        aiResponse = {
-          content: `Here is your generated image for prompt: "${content}"`,
-          type: 'image' as const,
-          fileUrl: cloudResult.secure_url,
-          fileName: 'flux_generated_image.png',
-        };
+          aiResponse = {
+            content: `Here is your generated image for prompt: "${content}"`,
+            type: 'image' as const,
+            fileUrl: cloudResult.secure_url,
+            fileName: 'generated_image.png',
+          };
+        }
       } else {
-        // Generate AI response using current model settings
-        aiResponse = await aiService.generateChatResponse(roomId, content, {
-          model: modelName,
-          temperature,
-          maxTokens,
-        });
+        if (isImagePromptForTextModel(content)) {
+          if (!isMultimodalModel(modelName)) {
+            aiResponse = {
+              content: `⚠️ **Text Model Notice**: You are currently using **${modelName}**, which is a **Text Generation Model**.\n\nTo generate images, please select an **Image Generation Model** (such as **FLUX.1 Schnell** or **Pollinations FLUX Image**) from the model selector menu.`,
+              type: 'text' as const,
+            };
+          } else {
+            const provider = ProviderFactory.getProvider(modelName);
+            logger.info(`Directly generating image via Gemini provider for prompt: "${content}"`);
+            const imageBuffer = await provider.generateImage!(content);
+            const cloudResult = await uploadToCloudinary(imageBuffer, 'generated_image.png', 'novamind/ai_generated');
+
+            try {
+              await Document.create({
+                userId: userId,
+                conversationId: roomId,
+                fileName: cloudResult.public_id.split('/').pop() || 'generated_image.png',
+                originalName: `Generated: ${content.substring(0, 30)}.png`,
+                fileType: 'image/png',
+                fileSize: imageBuffer.length,
+                storagePath: cloudResult.secure_url,
+                cloudinaryPublicId: cloudResult.public_id,
+                status: 'Ready',
+              });
+            } catch (docErr: any) {
+              logger.error(`Failed to save generated image to Document schema: ${docErr.message}`);
+            }
+
+            aiResponse = {
+              content: `Here is your generated image for prompt: "${content}"`,
+              type: 'image' as const,
+              fileUrl: cloudResult.secure_url,
+              fileName: 'generated_image.png',
+            };
+          }
+        } else {
+          // Generate AI response using current model settings
+          aiResponse = await aiService.generateChatResponse(roomId, content, {
+            model: modelName,
+            temperature,
+            maxTokens,
+          });
+        }
       }
 
       // Save the AI response as a message from the bot
@@ -233,6 +305,12 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const uploadChatAttachment = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user?.id || req.user?._id;
+
+  if (!userId) {
+    throw new ApiError(401, 'User not authenticated');
+  }
+
   if (!req.parsedFile) {
     throw new ApiError(400, 'No file uploaded');
   }
@@ -245,7 +323,7 @@ export const uploadChatAttachment = asyncHandler(async (req: Request, res: Respo
   // 2. Also save in the Document collection so it shows up in the Documents page
   try {
     await Document.create({
-      userId: req.user.id,
+      userId,
       fileName: cloudResult.public_id.split('/').pop() || filename,
       originalName: filename,
       fileType: mimetype,
@@ -272,7 +350,10 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
   logger.info(`[debug] streamMessage req.body: ${JSON.stringify(req.body)}`);
   const { content, type, fileUrl, fileName, model: requestedModel } = req.body;
   const roomId = req.params.roomId;
-  const userId = req.user.id;
+  const userId = req.user?.id || req.user?._id;
+  if (!userId) {
+    throw new ApiError(401, 'User not authenticated');
+  }
 
   // 1. Set up SSE Headers
   res.setHeader('Content-Type', 'text/event-stream');
@@ -330,24 +411,25 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
 
   let botUserId = '';
   try {
-    botUserId = await aiService.ensureBotUser();
-    const conversation = await Conversation.findById(roomId).lean();
+    await aiQueueService.enqueueTask(roomId, async () => {
+      botUserId = await aiService.ensureBotUser();
+      const conversation = await Conversation.findById(roomId).lean();
 
-    if (!conversation) {
-      throw new Error('Conversation not found');
-    }
+      if (!conversation) {
+        throw new Error('Conversation not found');
+      }
 
-    // Auto-add bot participant
-    const botIsParticipant = (conversation.participants as any[]).some(
-      (p: any) => p.toString() === botUserId
-    );
-    if (!botIsParticipant) {
-      await Conversation.findByIdAndUpdate(roomId, {
-        $addToSet: { participants: botUserId },
-      });
-    }
+      // Auto-add bot participant
+      const botIsParticipant = (conversation.participants as any[]).some(
+        (p: any) => p.toString() === botUserId
+      );
+      if (!botIsParticipant) {
+        await Conversation.findByIdAndUpdate(roomId, {
+          $addToSet: { participants: botUserId },
+        });
+      }
 
-    // Handle streaming based on model type
+      // Handle streaming based on model type
     if (conversation.documentId) {
       // Document QA/RAG (doesn't stream tokens natively, return complete block)
       res.write(`data: ${JSON.stringify({ token: "🔍 Searching document and generating answer...\n\n" })}\n\n`);
@@ -369,9 +451,28 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
       res.write(`data: ${JSON.stringify({ done: true, message: aiReply, userMessage })}\n\n`);
       res.end();
       return;
-    } else if (modelName.toLowerCase().includes('flux')) {
-      // FLUX Image Gen
-      res.write(`data: ${JSON.stringify({ token: "🎨 Generating image using FLUX.1 Schnell..." })}\n\n`);
+    } else if (isImageModelName(modelName)) {
+      if (isTextQueryForImageModel(content)) {
+        const textNotice = `🎨 **Image Model Notice**: You are currently using **${modelName}**, which is an **Image Generation Model** designed for visual descriptions (e.g., *"A futuristic cyberpunk city at sunset"*).\n\nTo ask questions, write text, or chat, please select a **Text Generation Model** (such as Gemini or Llama 3.3) from the model selector.`;
+        res.write(`data: ${JSON.stringify({ token: textNotice })}\n\n`);
+
+        const aiReply = await chatService.createMessage(
+          roomId,
+          botUserId,
+          textNotice,
+          'text',
+          undefined,
+          undefined,
+          modelName
+        );
+
+        res.write(`data: ${JSON.stringify({ done: true, message: aiReply, userMessage })}\n\n`);
+        res.end();
+        return;
+      }
+
+      // FLUX / Pollinations Image Gen
+      res.write(`data: ${JSON.stringify({ token: "🎨 Generating image..." })}\n\n`);
       
       const provider = ProviderFactory.getProvider(modelName);
       const imageBuffer = await provider.generateImage!(content);
@@ -381,7 +482,7 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
         await Document.create({
           userId: userId,
           conversationId: roomId,
-          fileName: cloudResult.public_id.split('/').pop() || 'flux_generated_image.png',
+          fileName: cloudResult.public_id.split('/').pop() || 'generated_image.png',
           originalName: `Generated: ${content.substring(0, 30)}.png`,
           fileType: 'image/png',
           fileSize: imageBuffer.length,
@@ -401,20 +502,100 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
         textResponse,
         'image',
         cloudResult.secure_url,
-        'flux_generated_image.png',
+        'generated_image.png',
         modelName
       );
-
-
 
       res.write(`data: ${JSON.stringify({ done: true, message: aiReply, userMessage })}\n\n`);
       res.end();
       return;
     } else {
+      if (isImagePromptForTextModel(content)) {
+        if (!isMultimodalModel(modelName)) {
+          const textNotice = `⚠️ **Text Model Notice**: You are currently using **${modelName}**, which is a **Text Generation Model**.\n\nTo generate images, please select an **Image Generation Model** (such as **FLUX.1 Schnell** or **Pollinations FLUX Image**) from the model selector menu.`;
+          res.write(`data: ${JSON.stringify({ token: textNotice })}\n\n`);
+
+          const aiReply = await chatService.createMessage(
+            roomId,
+            botUserId,
+            textNotice,
+            'text',
+            undefined,
+            undefined,
+            modelName
+          );
+
+          res.write(`data: ${JSON.stringify({ done: true, message: aiReply, userMessage })}\n\n`);
+          res.end();
+          return;
+        } else {
+          // Gemini Multimodal Model receiving an image prompt:
+          // Directly trigger image generation via provider.generateImage!
+          res.write(`data: ${JSON.stringify({ token: "🎨 Generating image using Gemini..." })}\n\n`);
+          
+          const provider = ProviderFactory.getProvider(modelName);
+          const imageBuffer = await provider.generateImage!(content);
+          const cloudResult = await uploadToCloudinary(imageBuffer, 'generated_image.png', 'novamind/ai_generated');
+
+          try {
+            await Document.create({
+              userId: userId,
+              conversationId: roomId,
+              fileName: cloudResult.public_id.split('/').pop() || 'generated_image.png',
+              originalName: `Generated: ${content.substring(0, 30)}.png`,
+              fileType: 'image/png',
+              fileSize: imageBuffer.length,
+              storagePath: cloudResult.secure_url,
+              cloudinaryPublicId: cloudResult.public_id,
+              status: 'Ready',
+            });
+          } catch (docErr: any) {
+            logger.error(`Failed to save generated image to Document schema: ${docErr.message}`);
+          }
+
+          const textResponse = `Here is your generated image for prompt: "${content}"`;
+          
+          const aiReply = await chatService.createMessage(
+            roomId,
+            botUserId,
+            textResponse,
+            'image',
+            cloudResult.secure_url,
+            'generated_image.png',
+            modelName
+          );
+
+          res.write(`data: ${JSON.stringify({ done: true, message: aiReply, userMessage })}\n\n`);
+          res.end();
+          return;
+        }
+      }
+
       // Standard Text AI Model Streaming
       const provider = ProviderFactory.getProvider(modelName);
       if (!provider.streamResponse) {
-        throw new Error(`Streaming is not supported for provider: ${provider.name}`);
+        // Fallback for providers that don't implement native streaming
+        const fullContent = await provider.generateResponse(content, {
+          model: modelName,
+          temperature,
+          maxTokens,
+        });
+
+        res.write(`data: ${JSON.stringify({ token: fullContent })}\n\n`);
+
+        const aiReply = await chatService.createMessage(
+          roomId,
+          botUserId,
+          fullContent,
+          'text',
+          undefined,
+          undefined,
+          modelName
+        );
+
+        res.write(`data: ${JSON.stringify({ done: true, message: aiReply, userMessage })}\n\n`);
+        res.end();
+        return;
       }
 
       // Load recent message history from DB for conversation context
@@ -458,21 +639,35 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
       let fullContent = '';
       for await (const chunk of stream) {
         fullContent += chunk;
-        // Don't flush tokens yet — we need to check if the full
-        // response is a JSON image-generation action first.
-        // We buffer everything and decide after the stream ends.
+        res.write(`data: ${JSON.stringify({ token: chunk })}\n\n`);
       }
 
-      // ── Detect JSON image-generation action in the streamed response ──
-      // The AI may respond with {"action":"generate_image","prompt":"..."}
-      // regardless of which text model is selected (Qwen, Llama, etc.).
-      // We handle this exactly the same way as sendMessage does.
       const trimmedFull = fullContent.trim();
       const isJsonImageAction =
         trimmedFull.startsWith('{') && trimmedFull.endsWith('}') &&
         (trimmedFull.includes('"generate_image"') || trimmedFull.includes('"dalle.text2im"'));
 
       if (isJsonImageAction) {
+        if (!isMultimodalModel(modelName)) {
+          const textNotice = `⚠️ **Text Model Notice**: You are currently using **${modelName}**, which is a **Text Generation Model**.\n\nTo generate images, please select an **Image Generation Model** (such as **FLUX.1 Schnell** or **Pollinations FLUX Image**) from the model selector menu.`;
+          res.write(`data: ${JSON.stringify({ token: textNotice })}\n\n`);
+
+          const aiReply = await chatService.createMessage(
+            roomId,
+            botUserId,
+            textNotice,
+            'text',
+            undefined,
+            undefined,
+            modelName
+          );
+
+          res.write(`data: ${JSON.stringify({ done: true, message: aiReply, userMessage })}\n\n`);
+          res.end();
+          return;
+        }
+
+        // Gemini Multimodal Model: Execute image generation
         try {
           const parsed = JSON.parse(trimmedFull);
           const isGenerateAction =
@@ -494,17 +689,14 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
             }
 
             if (promptText) {
-              logger.info(`[stream] AI requested image generation for prompt: ${promptText}`);
+              logger.info(`[stream] Gemini requested image generation for prompt: ${promptText}`);
 
-              // Notify the client we're now generating an image (triggers shimmer on frontend)
-              res.write(`data: ${JSON.stringify({ token: 'Generating image using FLUX' })}\n\n`);
+              res.write(`data: ${JSON.stringify({ token: '🎨 Generating image using Gemini Imagen...' })}\n\n`);
 
-              // Generate image via the FLUX/Gemini provider
-              const imgProvider = ProviderFactory.getProvider('gemini-3.1-flash-lite');
+              const imgProvider = ProviderFactory.getProvider(modelName);
               const imageBuffer = await imgProvider.generateImage!(promptText);
               const cloudResult = await uploadToCloudinary(imageBuffer, 'generated_image.png', 'novamind/ai_generated');
 
-              // Persist to Document collection
               try {
                 await Document.create({
                   userId,
@@ -524,7 +716,7 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
               const aiReply = await chatService.createMessage(
                 roomId,
                 botUserId,
-                promptText,
+                `Here is your generated image for prompt: "${promptText}"`,
                 'image',
                 cloudResult.secure_url,
                 'generated_image.png',
@@ -537,16 +729,11 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
             }
           }
         } catch (parseErr: any) {
-          logger.warn(`[stream] Failed to parse possible JSON image action: ${parseErr.message}`);
-          // Fall through to save as normal text
+          logger.warn(`[stream] Failed to parse JSON image action: ${parseErr.message}`);
         }
       }
 
-      // ── Normal text response: flush all buffered tokens then finish ──
-      // Now that we know it's not an image action, send tokens to the client.
-      res.write(`data: ${JSON.stringify({ token: fullContent })}\n\n`);
-
-      // Save complete response to DB
+      // Save complete response to DB and finish stream
       const aiReply = await chatService.createMessage(
         roomId,
         botUserId,
@@ -559,7 +746,7 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
 
       res.write(`data: ${JSON.stringify({ done: true, message: aiReply, userMessage })}\n\n`);
       res.end();
-    }
+    }});
   } catch (error: any) {
     logger.error(`AI streaming auto-reply failed: ${error.message}`);
     

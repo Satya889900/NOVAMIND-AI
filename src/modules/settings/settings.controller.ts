@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Settings } from '../../models/Settings';
 import { sendSuccess } from '../../utils/response';
 import { asyncHandler } from '../../utils/asyncHandler';
+import { ApiError } from '../../utils/ApiError';
 import { env } from '../../config/env';
 
 export const getProviders = asyncHandler(async (_req: Request, res: Response) => {
@@ -54,12 +55,25 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
           { id: 'flux-schnell', name: 'FLUX.1 Schnell', badge: 'Image Gen', description: 'State-of-the-art 12B parameter text-to-image model. Extremely fast and detailed.' },
         ],
       },
+      {
+        id: 'pollinations',
+        name: 'Pollinations AI',
+        configured: true,
+        models: [
+          { id: 'pollinations-text',  name: 'Pollinations AI (Text)', badge: 'Free & Fast', description: 'Free open-access text generation model powered by Pollinations AI.' },
+          { id: 'pollinations-image', name: 'Pollinations FLUX (Image)', badge: 'Image Gen', description: 'Free high-speed FLUX text-to-image generator powered by Pollinations AI.' },
+        ],
+      },
     ],
   });
 });
 
 export const getSettings = asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user.id;
+  const userId = req.user?.id || req.user?._id;
+
+  if (!userId) {
+    throw new ApiError(401, 'User not authenticated');
+  }
 
   let settings = await Settings.findOne({ userId });
 
@@ -80,7 +94,12 @@ export const getSettings = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const updateSettings = asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user.id;
+  const userId = req.user?.id || req.user?._id;
+
+  if (!userId) {
+    throw new ApiError(401, 'User not authenticated');
+  }
+
   const {
     theme,
     notificationsEnabled,

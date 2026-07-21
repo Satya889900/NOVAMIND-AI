@@ -1,3 +1,5 @@
+import crypto from 'crypto';
+import { redisClient, isRedisConnected } from '../../config/redis';
 import { ProviderFactory } from './providers/provider.factory';
 import { logger } from '../../config/logger';
 import { Message } from '../../models/Message';
@@ -151,6 +153,23 @@ export const aiService = {
       const modelName = options?.model || 'gemini-3.1-flash-lite';
       const provider = ProviderFactory.getProvider(modelName);
       
+      const cacheKey = `ai:cache:${modelName}:${crypto.createHash('md5').update(userMessage.trim().toLowerCase()).digest('hex')}`;
+
+      if (isRedisConnected && !imageAttachment && !audioAttachment && rawHistory.length < 2) {
+        try {
+          const cachedResponse = await redisClient.get(cacheKey);
+          if (cachedResponse) {
+            logger.info(`[Redis Cache Hit] Serving instant response for prompt: "${userMessage.substring(0, 30)}..."`);
+            return {
+              content: cachedResponse,
+              type: 'text',
+            };
+          }
+        } catch (rErr: any) {
+          logger.warn(`Redis cache lookup error: ${rErr.message}`);
+        }
+      }
+
       logger.info(`Routing request to AI Provider: ${provider.name} (Model: ${modelName})`);
       
       const textResponse = await provider.generateResponse(messageToSend, {
@@ -161,6 +180,14 @@ export const aiService = {
         imageAttachment,
         audioAttachment,
       });
+
+      if (isRedisConnected && textResponse && !textResponse.trim().startsWith('{')) {
+        try {
+          await redisClient.setex(cacheKey, 3600, textResponse);
+        } catch (rErr: any) {
+          logger.warn(`Redis cache save error: ${rErr.message}`);
+        }
+      }
 
 
       // Check if response is an image generation JSON payload

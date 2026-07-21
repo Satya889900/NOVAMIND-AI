@@ -8,6 +8,7 @@ import { OpenRouterProvider } from './openrouter.provider';
 import { OpenAiProvider } from './openai.provider';
 import { CerebrasProvider } from './cerebras.provider';
 import { CloudflareProvider } from './cloudflare.provider';
+import { PollinationsProvider } from './pollinations.provider';
 
 export class ProviderFactory {
   private static geminiProvider = new GeminiProvider();
@@ -19,6 +20,7 @@ export class ProviderFactory {
   private static openAiProvider = new OpenAiProvider();
   private static cerebrasProvider = new CerebrasProvider();
   private static cloudflareProvider = new CloudflareProvider();
+  private static pollinationsProvider = new PollinationsProvider();
 
   /**
    * Returns the AI Provider matching the model name.
@@ -26,6 +28,11 @@ export class ProviderFactory {
   static getProvider(modelName: string): IAiProvider {
     const lowerModel = modelName.toLowerCase();
     
+    // Check if the model corresponds to Pollinations AI
+    if (lowerModel.includes('pollination')) {
+      return this.pollinationsProvider;
+    }
+
     // Check if the model corresponds to OpenRouter (Checked first to avoid keyword collisions)
     if (lowerModel.includes('openrouter')) {
       return this.openRouterProvider;

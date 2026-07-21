@@ -3,6 +3,7 @@ import { aiClient, MODEL_FALLBACK_ORDER } from '../../../config/gemini';
 import { logger } from '../../../config/logger';
 import { env } from '../../../config/env';
 import { IAiProvider, ProviderChatOptions } from './provider.interface';
+import { attemptCloudflareImageGen } from './flux.provider';
 import https from 'https';
 import http from 'http';
 
@@ -79,23 +80,19 @@ function downloadFileToBuffer(url: string, attempt = 1): Promise<Buffer> {
 function generateImageViaGemini(prompt: string, apiKey: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const postData = JSON.stringify({
-      contents: [
-        {
-          parts: [
-            {
-              text: prompt,
-            },
-          ],
-        },
+      instances: [
+        { prompt }
       ],
-      generationConfig: {
-        responseModalities: ['IMAGE'],
-      },
+      parameters: {
+        sampleCount: 1,
+        aspectRatio: '1:1',
+        outputMimeType: 'image/png'
+      }
     });
 
     const options = {
       hostname: 'generativelanguage.googleapis.com',
-      path: '/v1beta/models/gemini-3.1-flash-image:generateContent',
+      path: '/v1beta/models/imagen-3.0-generate-002:predict',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -113,9 +110,7 @@ function generateImageViaGemini(prompt: string, apiKey: string): Promise<Buffer>
         }
         try {
           const parsed = JSON.parse(body);
-          const parts = parsed?.candidates?.[0]?.content?.parts;
-          const imagePart = parts?.find((p: any) => p.inlineData);
-          const base64Bytes = imagePart?.inlineData?.data;
+          const base64Bytes = parsed?.predictions?.[0]?.bytesBase64Encoded;
           
           if (!base64Bytes) {
             return reject(new Error(`No image bytes in response: ${body}`));
@@ -141,8 +136,8 @@ function generateImageViaHuggingFace(prompt: string, apiKey: string): Promise<Bu
     });
 
     const options = {
-      hostname: 'api-inference.huggingface.co',
-      path: '/models/black-forest-labs/FLUX.1-schnell',
+      hostname: 'router.huggingface.co',
+      path: '/hf-inference/v1/models/black-forest-labs/FLUX.1-schnell',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -374,64 +369,68 @@ export class GeminiProvider implements IAiProvider {
   async generateImage(prompt: string): Promise<Buffer> {
     const enhancedPrompt = `${prompt.trim()}, 8k resolution, highly detailed, cinematic lighting, photorealistic, clean composition, professional digital art, masterpiece`;
     const encodedPrompt = encodeURIComponent(enhancedPrompt);
-    const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true&model=flux&enhance=true`;
+    const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true`;
 
     const now = Date.now();
     const inCooldown = imagenQuotaResetAt > now;
 
-    if (inCooldown) {
+    // 1. Try Gemini Imagen FIRST if not in cooldown
+    if (!inCooldown) {
+      try {
+        if (!env.GEMINI_API_KEY) {
+          throw new Error('GEMINI_API_KEY is not configured');
+        }
+        logger.info(`Attempting image generation via Gemini Imagen...`);
+        return await generateImageViaGemini(enhancedPrompt, env.GEMINI_API_KEY);
+      } catch (err: any) {
+        const errMsg: string = err.message || String(err);
+
+        // If rate-limited, parse the retry delay and cache the cooldown window
+        if (errMsg.includes('429') || errMsg.toLowerCase().includes('quota')) {
+          const delaySecs = parseRetryDelaySecs(errMsg);
+          imagenQuotaResetAt = Date.now() + delaySecs * 1000;
+          logger.warn(
+            `Gemini Imagen quota exceeded. Cooldown set for ${delaySecs.toFixed(0)}s ` +
+            `(until ${new Date(imagenQuotaResetAt).toISOString()}).`
+          );
+        } else {
+          logger.warn(`Gemini Imagen failed (${errMsg}).`);
+        }
+      }
+    } else {
       const remainingSecs = Math.ceil((imagenQuotaResetAt - now) / 1000);
-      logger.info(`Gemini Imagen is in quota cooldown for ${remainingSecs}s more. Checking HuggingFace first...`);
-      
-      const hfApiKey = env.HUGGINGFACE_API_KEY || env.BFL_API_KEY;
-      const isHfPlaceholder = !hfApiKey || hfApiKey.includes('your_huggingface') || hfApiKey.includes('your_bfl') || hfApiKey.includes('hf_mock');
-      if (!isHfPlaceholder) {
-        try {
-          logger.info(`Attempting image generation via HuggingFace FLUX.1-schnell...`);
-          return await generateImageViaHuggingFace(enhancedPrompt, hfApiKey!);
-        } catch (hfErr: any) {
-          logger.warn(`HuggingFace FLUX generation failed (${hfErr.message}). Falling back to Pollinations.ai...`);
-        }
-      }
-      return await downloadFileToBuffer(pollinationsUrl);
+      logger.info(`Gemini Imagen is in quota cooldown for ${remainingSecs}s more. Checking Cloudflare Workers AI fallback...`);
     }
 
-    try {
-      if (!env.GEMINI_API_KEY) {
-        throw new Error('GEMINI_API_KEY is not configured');
-      }
-      logger.info(`Attempting image generation via Gemini Imagen...`);
-      return await generateImageViaGemini(enhancedPrompt, env.GEMINI_API_KEY);
-    } catch (err: any) {
-      const errMsg: string = err.message || String(err);
+    // 2. Fallback to Cloudflare Workers AI FLUX if Gemini Imagen is unavailable/failed
+    const cfToken = env.CLOUDFLARE_API_TOKEN;
+    const isCfConfigured = cfToken && !cfToken.includes('your_cloudflare') && !cfToken.includes('mock');
 
-      // If rate-limited, parse the retry delay and cache the cooldown window
-      if (errMsg.includes('429') || errMsg.toLowerCase().includes('quota')) {
-        const delaySecs = parseRetryDelaySecs(errMsg);
-        imagenQuotaResetAt = Date.now() + delaySecs * 1000;
-        logger.warn(
-          `Gemini Imagen quota exceeded. Cooldown set for ${delaySecs.toFixed(0)}s ` +
-          `(until ${new Date(imagenQuotaResetAt).toISOString()}).`
-        );
-      } else {
-        logger.warn(`Gemini Imagen failed (${errMsg}).`);
+    if (isCfConfigured) {
+      try {
+        logger.info(`Attempting fallback image generation via Cloudflare Workers AI FLUX...`);
+        return await attemptCloudflareImageGen(enhancedPrompt);
+      } catch (cfErr: any) {
+        logger.warn(`Cloudflare Workers AI FLUX fallback failed (${cfErr.message}). Checking HuggingFace...`);
       }
-
-      // Try HuggingFace FLUX.1-schnell first before falling back to Pollinations!
-      const hfApiKey = env.HUGGINGFACE_API_KEY || env.BFL_API_KEY;
-      const isHfPlaceholder = !hfApiKey || hfApiKey.includes('your_huggingface') || hfApiKey.includes('your_bfl') || hfApiKey.includes('hf_mock');
-      if (!isHfPlaceholder) {
-        try {
-          logger.info(`Gemini failed. Attempting image generation via HuggingFace FLUX.1-schnell...`);
-          return await generateImageViaHuggingFace(enhancedPrompt, hfApiKey!);
-        } catch (hfErr: any) {
-          logger.warn(`HuggingFace FLUX generation failed (${hfErr.message}). Falling back to Pollinations.ai...`);
-        }
-      } else {
-        logger.info(`HuggingFace API Key is not configured. Falling back directly to Pollinations.ai...`);
-      }
-
-      return await downloadFileToBuffer(pollinationsUrl);
     }
+
+    // 3. Fallback to HuggingFace FLUX.1-schnell
+    const hfApiKey = env.HUGGINGFACE_API_KEY || env.BFL_API_KEY;
+    const isHfPlaceholder = !hfApiKey || hfApiKey.includes('your_huggingface') || hfApiKey.includes('your_bfl') || hfApiKey.includes('hf_mock');
+    if (!isHfPlaceholder) {
+      try {
+        logger.info(`Attempting fallback image generation via HuggingFace FLUX.1-schnell...`);
+        return await generateImageViaHuggingFace(enhancedPrompt, hfApiKey!);
+      } catch (hfErr: any) {
+        logger.warn(`HuggingFace FLUX fallback failed (${hfErr.message}). Falling back to Pollinations.ai...`);
+      }
+    } else {
+      logger.info(`HuggingFace API Key is not configured. Falling back directly to Pollinations.ai...`);
+    }
+
+    // 4. Ultimate Fallback to Pollinations.ai
+    logger.info(`Falling back directly to Pollinations.ai image generation...`);
+    return await downloadFileToBuffer(pollinationsUrl);
   }
 }

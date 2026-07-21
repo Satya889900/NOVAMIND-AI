@@ -21,6 +21,8 @@ const envSchema = z.object({
   CLOUDFLARE_API_TOKEN: z.string().optional(),
   CLOUDFLARE_ACCOUNT_ID: z.string().optional(),
   BFL_API_KEY: z.string().optional(),
+  POLLINATIONS_API_KEY: z.string().optional(),
+  REDIS_URL: z.string().default('redis://localhost:6379'),
   CHROMADB_URL: z.string().default('http://localhost:8000'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   CLOUDINARY_CLOUD_NAME: z.string().min(1, 'CLOUDINARY_CLOUD_NAME is required'),

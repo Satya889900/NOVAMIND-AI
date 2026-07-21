@@ -98,6 +98,7 @@ function generateImageViaCloudflare(prompt: string, accountId: string, apiToken:
   return new Promise((resolve, reject) => {
     const postData = JSON.stringify({
       prompt,
+      num_steps: 4,
     });
 
     const options = {
@@ -156,7 +157,7 @@ function generateImageViaCloudflare(prompt: string, accountId: string, apiToken:
   });
 }
 
-async function attemptCloudflareImageGen(prompt: string): Promise<Buffer> {
+export async function attemptCloudflareImageGen(prompt: string): Promise<Buffer> {
   const cfToken = env.CLOUDFLARE_API_TOKEN;
   const cfAccount = env.CLOUDFLARE_ACCOUNT_ID;
   const hasCf = cfToken && !cfToken.includes('mock') && !cfToken.includes('your_') &&
@@ -195,9 +196,6 @@ export class BlackForestLabsProvider implements IAiProvider {
   name = 'blackforest';
 
   async generateResponse(prompt: string, options?: ProviderChatOptions): Promise<string> {
-    // If used as a text generator, return a description saying the image was created.
-    // In our custom chat controller routing, we intercept FLUX models and generate the image directly,
-    // but in case this is called normally (e.g. from ai.service) we support this cleanly.
     return `[IMAGE_GENERATION] ${prompt}`;
   }
 
@@ -223,7 +221,7 @@ export class BlackForestLabsProvider implements IAiProvider {
         logger.warn(`Cloudflare fallback failed (${cfErr.message}). Falling back to free Pollinations.ai...`);
       }
       const encodedPrompt = encodeURIComponent(enhancedPrompt);
-      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true&model=flux&enhance=true`;
+      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true`;
       return await downloadFileToBuffer(imageUrl);
     }
 
@@ -270,7 +268,6 @@ export class BlackForestLabsProvider implements IAiProvider {
 
       throw new Error('BFL Image generation timed out');
     } catch (err: any) {
-      // If the API key is definitively invalid (422), remember it so we skip BFL for the rest of the session
       if (err.message.includes('422') && err.message.toLowerCase().includes('invalid api key')) {
         bflKeyInvalid = true;
         logger.warn('BFL API key is invalid (422). All future requests this session will skip BFL entirely.');
@@ -283,7 +280,7 @@ export class BlackForestLabsProvider implements IAiProvider {
         logger.warn(`Cloudflare fallback failed (${cfErr.message}). Falling back to Pollinations.ai...`);
       }
       const encodedPrompt = encodeURIComponent(enhancedPrompt);
-      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true&model=flux&enhance=true`;
+      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true`;
       return await downloadFileToBuffer(imageUrl);
     }
   }

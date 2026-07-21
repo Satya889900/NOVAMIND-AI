@@ -39,7 +39,7 @@ export const handleAiChat = asyncHandler(async (req: Request, res: Response) => 
   const maxTokens = userSettings.maxTokens;
 
   let aiMessage;
-  if (modelName.toLowerCase().includes('flux')) {
+  if (modelName.toLowerCase().includes('flux') || modelName.toLowerCase().includes('pollinations-image')) {
     const provider = ProviderFactory.getProvider(modelName);
     const imageBuffer = await provider.generateImage!(userMessage);
     const cloudResult = await uploadToCloudinary(imageBuffer, 'generated_image.png', 'novamind/ai_generated');
