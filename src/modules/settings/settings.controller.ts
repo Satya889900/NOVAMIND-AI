@@ -18,8 +18,8 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
         name: 'Google Gemini',
         configured: !!env.GEMINI_API_KEY,
         models: [
-          { id: 'gemini-3.1-flash-lite', name: 'Gemini 2.5 Flash', badge: 'Fast & Efficient', description: 'Speed-optimized with broad reasoning capabilities.' },
-          { id: 'gemini-3.5-flash',      name: 'Gemini 2.5 Pro',   badge: 'Advanced Logic',   description: 'Best for coding, math, and complex reasoning.' },
+          { id: 'gemini-3.1-flash-lite', name: 'Gemini 2.5 Flash', badge: 'Text + Image', description: 'Fast multimodal model — handles both text chat & image generation seamlessly.' },
+          { id: 'gemini-3.5-flash',      name: 'Gemini 2.5 Pro',   badge: 'Text + Image', description: 'Advanced logic for coding, math, reasoning & image generation.' },
         ],
       },
       {
@@ -27,7 +27,7 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
         name: 'Groq (Meta Llama)',
         configured: !isMockGroq,
         models: [
-          { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 · 70B', badge: 'Lightning Fast', description: 'Ultra-low latency via Groq silicon. Meta 70B parameter model.' },
+          { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 · 70B', badge: 'Text Chat', description: 'Ultra-low latency via Groq silicon. Meta 70B parameter model.' },
         ],
       },
       {
@@ -35,7 +35,7 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
         name: 'Hugging Face',
         configured: !isMockHF,
         models: [
-          { id: 'Qwen/Qwen2.5-7B-Instruct', name: 'Qwen 2.5 · 7B', badge: 'Ultra Fast', description: "Alibaba's speed-optimized 7B open-source model. Responds in under 1 second." },
+          { id: 'Qwen/Qwen2.5-7B-Instruct', name: 'Qwen 2.5 · 7B', badge: 'Text Chat', description: "Alibaba's speed-optimized 7B open-source model. Responds in under 1 second." },
         ],
       },
       {
@@ -43,16 +43,16 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
         name: 'Cloudflare Workers AI',
         configured: true,
         models: [
-          { id: 'cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast', name: 'Llama 3.3 · 70B (CF)', badge: 'Best Overall', description: 'Meta Llama 3.3 70B FP8 Fast — best quality model for chat, coding & assistant tasks on Cloudflare edge.' },
-          { id: 'cloudflare/@cf/meta/llama-3.2-3b-instruct',          name: 'Llama 3.2 · 3B (CF Fast)', badge: 'Ultra Fast',   description: 'Meta Llama 3.2 3B — extremely fast response time for chat and general queries.' },
+          { id: 'cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast', name: 'Llama 3.3 · 70B (CF)', badge: 'Text Chat', description: 'Meta Llama 3.3 70B FP8 Fast — best quality model for chat, coding & assistant tasks on Cloudflare edge.' },
+          { id: 'cloudflare/@cf/meta/llama-3.2-3b-instruct',          name: 'Llama 3.2 · 3B (CF Fast)', badge: 'Text Chat',   description: 'Meta Llama 3.2 3B — extremely fast response time for chat and general queries.' },
         ],
       },
       {
         id: 'blackforest',
         name: 'Black Forest Labs',
-        configured: !isMockBFL || !!env.GEMINI_API_KEY, // If BFL is not set but Gemini is, we fall back to Pollinations/Gemini so it works!
+        configured: !isMockBFL || !!env.GEMINI_API_KEY,
         models: [
-          { id: 'flux-schnell', name: 'FLUX.1 Schnell', badge: 'Image Gen', description: 'State-of-the-art 12B parameter text-to-image model. Extremely fast and detailed.' },
+          { id: 'flux-schnell', name: 'FLUX.1 Schnell', badge: 'Image Gen', description: 'State-of-the-art 12B parameter text-to-image model. Dedicated image generation.' },
         ],
       },
       {
@@ -60,7 +60,7 @@ export const getProviders = asyncHandler(async (_req: Request, res: Response) =>
         name: 'Pollinations AI',
         configured: true,
         models: [
-          { id: 'pollinations-text',  name: 'Pollinations AI (Text)', badge: 'Free & Fast', description: 'Free open-access text generation model powered by Pollinations AI.' },
+          { id: 'pollinations-text',  name: 'Pollinations AI (Text)', badge: 'Text Chat', description: 'Free open-access text generation model powered by Pollinations AI.' },
           { id: 'pollinations-image', name: 'Pollinations FLUX (Image)', badge: 'Image Gen', description: 'Free high-speed FLUX text-to-image generator powered by Pollinations AI.' },
         ],
       },

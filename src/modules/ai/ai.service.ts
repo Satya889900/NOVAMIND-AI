@@ -10,6 +10,7 @@ import { env } from '../../config/env';
 import https from 'https';
 import http from 'http';
 import { uploadToCloudinary } from '../../config/multer';
+import { memoryService } from '../../services/memory.service';
 
 export interface AiResponse {
   content: string;
@@ -71,31 +72,32 @@ export const aiService = {
       ? env.GEMINI_BOT_ID
       : (await User.findOne({ email: 'novamind-ai@novamind.ai' }))?._id?.toString();
 
-    // Load last 40 messages for conversation context
-    const allMessages = await Message.find({ conversationId })
-      .sort({ createdAt: 'asc' })
-      .limit(40);
+    // Load context-aware message history & auto-summarized memory from DB
+    const rawHistory = await memoryService.getConversationHistory(
+      conversationId,
+      botUserId || '',
+      options?.model || 'gemini-3.1-flash-lite'
+    );
 
-    // Exclude the last saved message (the current user msg) from history
-    const historyMessages = allMessages.slice(0, -1);
-
-    // Build unified history
-    const rawHistory = historyMessages
-      .filter((msg) => msg.content && msg.content.trim() !== '')
-      .map((msg) => ({
-        role: botUserId && msg.senderId.toString() === botUserId ? ('model' as const) : ('user' as const),
-        content: msg.content,
-      }));
+    // Exclude current user message from history if present
+    if (rawHistory.length > 0) {
+      rawHistory.pop();
+    }
 
     // Prepend system instruction to the first message if no history yet
     const messageToSend = rawHistory.length === 0
       ? `${SYSTEM_INSTRUCTION}\n\n${userMessage}`
       : userMessage;
+      
+    // Fetch recent raw DB messages for attachment checking and user mapping
+    const recentDbMessages = await Message.find({ conversationId })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .lean();
 
     // Check recent history (last 5 messages) for an image attachment
     let imageAttachment: { mimeType: string; data: string } | undefined;
-    const recentMessages = allMessages.slice(-5);
-    const imageMessage = [...recentMessages].reverse().find(m => m.type === 'image' && m.fileUrl);
+    const imageMessage = recentDbMessages.find(m => m.type === 'image' && m.fileUrl);
 
     if (imageMessage && imageMessage.fileUrl) {
       try {
@@ -118,7 +120,7 @@ export const aiService = {
 
     // Check recent history (last 5 messages) for an audio/voice attachment
     let audioAttachment: { mimeType: string; data: string } | undefined;
-    const audioMessage = [...recentMessages].reverse().find(m => 
+    const audioMessage = recentDbMessages.find(m => 
       m.fileUrl && (
         m.fileUrl.endsWith('.webm') || 
         m.fileUrl.endsWith('.wav') || 
@@ -232,7 +234,7 @@ export const aiService = {
               const cloudResult = await uploadToCloudinary(imageBuffer, 'generated_image.png', 'novamind/ai_generated');
 
               // Save to Document collection for the user
-              const lastMsg = allMessages[allMessages.length - 1];
+              const lastMsg = recentDbMessages[0];
               if (lastMsg && lastMsg.senderId) {
                 try {
                   await Document.create({

@@ -13,6 +13,7 @@ import { uploadToCloudinary } from '../../config/multer';
 import { Settings } from '../../models/Settings';
 import { ragService } from '../rag/rag.service';
 import { aiQueueService } from '../../services/aiQueue.service';
+import { memoryService } from '../../services/memory.service';
 
 const isImageModelName = (model: string) => {
   const m = model.toLowerCase();
@@ -598,17 +599,8 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
         return;
       }
 
-      // Load recent message history from DB for conversation context
-      const dbHistory = await Message.find({ conversationId: roomId })
-        .sort({ createdAt: 1 })
-        .limit(30)
-        .lean();
-
-      // Convert history format
-      const providerHistory = dbHistory.map(msg => ({
-        role: msg.senderId.toString() === botUserId ? 'assistant' as const : 'user' as const,
-        content: msg.content,
-      }));
+      // Load context-aware message history & auto-summarized memory from DB
+      const providerHistory = await memoryService.getConversationHistory(roomId, botUserId, modelName);
 
       // Exclude last user message just saved
       if (providerHistory.length > 0) {

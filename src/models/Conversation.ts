@@ -30,6 +30,10 @@ const ConversationSchema = new Schema(
       ref: 'Document',
       required: false,
     },
+    summary: {
+      type: String,
+      default: '',
+    },
   },
   {
     timestamps: true,
