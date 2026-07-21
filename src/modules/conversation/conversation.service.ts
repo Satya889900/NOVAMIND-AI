@@ -67,13 +67,27 @@ export const conversationService = {
 
       if (docsToDelete.length > 0) {
         logger.info(`Deleting ${docsToDelete.length} non-starred document(s) from conversation ${roomId}`);
-        for (const doc of docsToDelete) {
-          if (doc.cloudinaryPublicId) {
-            const resourceType = doc.fileType.startsWith('image/') ? 'image' : 'raw';
-            await deleteFromCloudinary(doc.cloudinaryPublicId, resourceType);
-          }
-          await DocumentChunk.deleteMany({ documentId: doc._id });
-        }
+
+        // Run all Cloudinary deletions and chunk DB deletions in PARALLEL for speed
+        const docIds = docsToDelete.map((d) => d._id);
+
+        const cloudinaryCleanups = docsToDelete.map((doc) => {
+          const resourceType = doc.fileType.startsWith('image/') ? 'image' : 'raw';
+          return doc.cloudinaryPublicId
+            ? deleteFromCloudinary(doc.cloudinaryPublicId, resourceType).catch((err) =>
+                logger.warn(`Cloudinary delete failed for ${doc.cloudinaryPublicId}: ${err.message}`)
+              )
+            : Promise.resolve();
+        });
+
+        // Fire Cloudinary deletions + chunk DB deletion all at once, don't await them —
+        // return the HTTP response immediately and let cleanup finish in the background.
+        Promise.allSettled([
+          ...cloudinaryCleanups,
+          DocumentChunk.deleteMany({ documentId: { $in: docIds } }),
+        ]).catch((err) => logger.warn(`Background cleanup error: ${err.message}`));
+
+        // DB document records deletion — fast, no external network call
         await Document.deleteMany({
           conversationId: roomId,
           isStarred: { $ne: true },
