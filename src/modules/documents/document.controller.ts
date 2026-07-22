@@ -6,6 +6,7 @@ import { asyncHandler } from '../../utils/asyncHandler';
 import { ApiError } from '../../utils/ApiError';
 import { Document } from '../../models/Document';
 import { uploadToCloudinary } from '../../config/multer';
+import { logger } from '../../config/logger';
 
 export const uploadDocument = asyncHandler(async (req: Request, res: Response) => {
   if (!req.parsedFile) {
@@ -17,7 +18,7 @@ export const uploadDocument = asyncHandler(async (req: Request, res: Response) =
   // 1. Upload file buffer to Cloudinary
   const cloudResult = await uploadToCloudinary(buffer, filename);
 
-  // 2. Create document record (Uploaded status)
+  // 2. Create document record (Processing status)
   const doc = await Document.create({
     userId: req.user.id,
     fileName: cloudResult.public_id.split('/').pop() || filename,
@@ -26,13 +27,15 @@ export const uploadDocument = asyncHandler(async (req: Request, res: Response) =
     fileSize: size,
     storagePath: cloudResult.secure_url,
     cloudinaryPublicId: cloudResult.public_id,
-    status: 'Uploaded',
+    status: 'Processing',
   });
 
-  // 3. Process document (Extract text -> chunk -> store)
-  const result = await documentService.processDocument(doc.id);
+  // 3. Process document in background (extract text -> chunk -> embeddings -> vector DB -> summary)
+  documentService.processDocument(doc.id).catch((err: any) => {
+    logger.error(`Background processing failed for document ${doc.id}: ${err.message}`);
+  });
 
-  return sendSuccess(res, 'Document uploaded and processed successfully', result.document, 201);
+  return sendSuccess(res, 'Document uploaded. Background processing started...', doc, 201);
 });
 
 export const getDocuments = asyncHandler(async (req: Request, res: Response) => {
@@ -61,4 +64,9 @@ export const toggleStarDocument = asyncHandler(async (req: Request, res: Respons
   doc.isStarred = !doc.isStarred;
   await doc.save();
   return sendSuccess(res, doc.isStarred ? 'Document starred' : 'Document unstarred', doc);
+});
+
+export const auditDocumentController = asyncHandler(async (req: Request, res: Response) => {
+  const result = await documentService.auditDocument(req.params.id, req.user.id);
+  return sendSuccess(res, 'Document audit report generated successfully', result);
 });

@@ -574,9 +574,57 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
 
       // Standard Text AI Model Streaming
       const provider = ProviderFactory.getProvider(modelName);
+
+      // Check FULL conversation history for any document attachment (PDF, DOCX, TXT)
+      let promptToSend = content;
+      const allDbMessages = await Message.find({ conversationId: roomId })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .lean();
+
+      const docMessage = allDbMessages.find(m => 
+        m.fileUrl && (
+          m.fileUrl.endsWith('.pdf') || 
+          m.fileUrl.endsWith('.docx') || 
+          m.fileUrl.endsWith('.doc') || 
+          m.fileUrl.endsWith('.txt') ||
+          m.type === 'file'
+        ) && !m.fileUrl.match(/\.(png|jpg|jpeg|gif|webp|webm|wav|mp3|m4a)$/i)
+      );
+
+      if (docMessage && docMessage.fileUrl) {
+        try {
+          logger.info(`[streamMessage] Parsing attached document for streaming context: ${docMessage.fileUrl}`);
+          const { parserService } = require('../documents/parser.service');
+
+          let mimeType = 'application/pdf';
+          const urlLower = docMessage.fileUrl.toLowerCase();
+          const nameLower = (docMessage.fileName || '').toLowerCase();
+
+          if (urlLower.endsWith('.docx') || nameLower.endsWith('.docx')) {
+            mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+          } else if (urlLower.endsWith('.doc') || nameLower.endsWith('.doc')) {
+            mimeType = 'application/msword';
+          } else if (urlLower.endsWith('.txt') || nameLower.endsWith('.txt')) {
+            mimeType = 'text/plain';
+          }
+
+          const parsedText = await parserService.parseDocumentToText(docMessage.fileUrl, mimeType);
+          if (parsedText && parsedText.trim()) {
+            const docName = docMessage.fileName || 'Uploaded Document';
+            const documentContext = `[Attached Document Content: "${docName}"]\n${parsedText.substring(0, 20000)}\n[End of Document Content]`;
+            promptToSend = content && content.trim() !== docName
+              ? `${content}\n\n${documentContext}`
+              : `Please analyze this document, provide an executive summary, key takeaways, best suggestions, and follow-up questions:\n\n${documentContext}`;
+          }
+        } catch (err: any) {
+          logger.error(`[streamMessage] Failed to parse document attachment: ${err.message}`);
+        }
+      }
+
       if (!provider.streamResponse) {
         // Fallback for providers that don't implement native streaming
-        const fullContent = await provider.generateResponse(content, {
+        const fullContent = await provider.generateResponse(promptToSend, {
           model: modelName,
           temperature,
           maxTokens,
@@ -620,7 +668,7 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
         }
       }
 
-      const stream = provider.streamResponse(content, {
+      const stream = provider.streamResponse(promptToSend, {
         model: modelName,
         temperature,
         maxTokens,

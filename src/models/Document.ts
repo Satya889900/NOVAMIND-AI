@@ -59,6 +59,10 @@ const DocumentSchema = new Schema(
       type: [String],
       default: [],
     },
+    auditReport: {
+      type: String,
+      default: '',
+    },
   },
 
   {

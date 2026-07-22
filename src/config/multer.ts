@@ -28,9 +28,15 @@ export const uploadToCloudinary = (
   folder = 'novamind/documents'
 ): Promise<CloudinaryUploadResult> => {
   return new Promise((resolve, reject) => {
+    const ext = (originalName.split('.').pop() || '').toLowerCase();
+    const isDoc = ['pdf', 'docx', 'doc', 'txt', 'rtf'].includes(ext);
+    const isAudioVideo = ['webm', 'wav', 'mp3', 'm4a', 'mp4', 'ogg'].includes(ext);
+
+    const resource_type = isDoc ? 'raw' : (isAudioVideo ? 'video' : 'auto');
+
     const uploadStream = cloudinary.uploader.upload_stream(
       {
-        resource_type: 'auto',
+        resource_type,
         folder,
         public_id: `${Date.now()}-${originalName.replace(/[^a-zA-Z0-9._-]/g, '_')}`,
         use_filename: true,

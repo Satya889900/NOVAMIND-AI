@@ -10,6 +10,7 @@ import { env } from '../../config/env';
 import https from 'https';
 import http from 'http';
 import { uploadToCloudinary } from '../../config/multer';
+import { cloudinary } from '../../config/cloudinary';
 import { memoryService } from '../../services/memory.service';
 
 export interface AiResponse {
@@ -19,38 +20,86 @@ export interface AiResponse {
   fileName?: string;
 }
 
+function getSignedCloudinaryUrl(url: string): string {
+  if (!url.includes('res.cloudinary.com') || url.includes('s--')) return url;
+
+  try {
+    const match = url.match(/res\.cloudinary\.com\/[^/]+\/(image|raw|video|auto)\/upload\/(?:v\d+\/)?(.+)$/);
+    if (match) {
+      const resourceType = match[1];
+      const publicId = match[2];
+      const signedUrl = cloudinary.url(publicId, {
+        resource_type: resourceType as any,
+        sign_url: true,
+        secure: true,
+        type: 'upload',
+      });
+      logger.info(`Generated signed Cloudinary URL in ai.service: ${signedUrl}`);
+      return signedUrl;
+    }
+  } catch (err: any) {
+    logger.warn(`Failed to generate signed Cloudinary URL: ${err.message}`);
+  }
+  return url;
+}
+
 export function downloadFileToBuffer(url: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const client = url.startsWith('https') ? https : http;
-    const req = client.get(url, (res) => {
-      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        return downloadFileToBuffer(res.headers.location).then(resolve).catch(reject);
-      }
-      if (res.statusCode && res.statusCode >= 400) {
-        res.resume();
-        return reject(new Error(`HTTP status code ${res.statusCode}`));
-      }
-      const chunks: Buffer[] = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => resolve(Buffer.concat(chunks)));
-      res.on('error', reject);
-    });
-    // 10-second timeout: context image is optional, never block the AI reply for it
-    req.setTimeout(10_000, () => {
-      req.destroy();
-      reject(new Error('Context image download timed out after 10s'));
-    });
-    req.on('error', reject);
+    try {
+      const targetUrl = getSignedCloudinaryUrl(url);
+      const parsedUrl = new URL(targetUrl);
+      const options = {
+        hostname: parsedUrl.hostname,
+        path: parsedUrl.pathname + parsedUrl.search,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': '*/*',
+        },
+      };
+      const client = targetUrl.startsWith('https') ? https : http;
+      const req = client.get(options, (res) => {
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          const redirectUrl = res.headers.location.startsWith('http')
+            ? res.headers.location
+            : `${parsedUrl.protocol}//${parsedUrl.host}${res.headers.location}`;
+          return downloadFileToBuffer(redirectUrl).then(resolve).catch(reject);
+        }
+        if (res.statusCode && res.statusCode >= 400) {
+          res.resume();
+          if (res.statusCode === 401 && url.includes('/image/upload/')) {
+            const rawUrl = url.replace('/image/upload/', '/raw/upload/');
+            logger.info(`Retrying Cloudinary file download with raw endpoint: ${rawUrl}`);
+            return downloadFileToBuffer(rawUrl).then(resolve).catch(reject);
+          }
+          return reject(new Error(`HTTP status code ${res.statusCode}`));
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', reject);
+      });
+      req.setTimeout(10_000, () => {
+        req.destroy();
+        reject(new Error('Context file download timed out after 10s'));
+      });
+      req.on('error', reject);
+    } catch (err: any) {
+      reject(err);
+    }
   });
 }
 
-const SYSTEM_INSTRUCTION = `You are NovaMind AI — a helpful, friendly, and intelligent AI assistant.
+const SYSTEM_INSTRUCTION = `You are NovaMind AI — a world-class AI assistant designed to analyze documents and answer questions with maximum depth, clarity, and intelligence (like ChatGPT Plus / Enterprise).
 
 Key behaviors:
-- Respond naturally and conversationally like a knowledgeable friend.
-- Give clear, well-structured, and helpful answers.
-- Use markdown formatting.
+- Respond naturally, thoroughly, and conversationally like a senior domain expert.
+- Use clean markdown formatting with emojis and bullet points for maximum readability.
+- When analyzing an attached document or PDF, or when asked for a summary/questions about a document:
+  1. 📌 **Executive Summary / Answer**: Direct, clear, and well-explained response to the prompt.
+  2. 💡 **Key Takeaways & Findings**: Highlight essential points, data, or facts.
+  3. 🚀 **Best Suggestions & Proactive Insights**: Give smart, expert recommendations, actionable advice, or potential improvements based on the document.
+  4. ❓ **Suggested Next Questions**: List 2-3 relevant questions the user can ask next to explore the document deeper.
 - If the user sends a voice or audio attachment, it is a voice recording of them speaking. Listen to it, transcribe what they said, and answer their question. In your response, ALWAYS start with a transcription indicator line: "**[Transcribed Voice]:** '*your transcription of the user's spoken words*'\n\n" followed by your normal answer.
 - If the user asks you to generate, create, draw, or show an image (e.g., "draw a cute puppy", "generate an image of a sunset"), you MUST respond ONLY with a JSON object in this exact format:
 {
@@ -84,18 +133,13 @@ export const aiService = {
       rawHistory.pop();
     }
 
-    // Prepend system instruction to the first message if no history yet
-    const messageToSend = rawHistory.length === 0
-      ? `${SYSTEM_INSTRUCTION}\n\n${userMessage}`
-      : userMessage;
-      
     // Fetch recent raw DB messages for attachment checking and user mapping
     const recentDbMessages = await Message.find({ conversationId })
       .sort({ createdAt: -1 })
-      .limit(5)
+      .limit(10)
       .lean();
 
-    // Check recent history (last 5 messages) for an image attachment
+    // Check recent history for an image attachment
     let imageAttachment: { mimeType: string; data: string } | undefined;
     const imageMessage = recentDbMessages.find(m => m.type === 'image' && m.fileUrl);
 
@@ -118,7 +162,7 @@ export const aiService = {
       }
     }
 
-    // Check recent history (last 5 messages) for an audio/voice attachment
+    // Check recent history for an audio/voice attachment
     let audioAttachment: { mimeType: string; data: string } | undefined;
     const audioMessage = recentDbMessages.find(m => 
       m.fileUrl && (
@@ -151,13 +195,67 @@ export const aiService = {
       }
     }
 
+    // Check FULL conversation history for any document attachment (PDF, DOCX, TXT)
+    let documentContext = '';
+    const allDbMessages = await Message.find({ conversationId })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    const docMessage = allDbMessages.find(m => 
+      m.fileUrl && (
+        m.fileUrl.endsWith('.pdf') || 
+        m.fileUrl.endsWith('.docx') || 
+        m.fileUrl.endsWith('.doc') || 
+        m.fileUrl.endsWith('.txt') ||
+        m.type === 'file'
+      ) && !m.fileUrl.match(/\.(png|jpg|jpeg|gif|webp|webm|wav|mp3|m4a)$/i)
+    );
+
+    if (docMessage && docMessage.fileUrl) {
+      try {
+        logger.info(`Parsing attached document for AI context: ${docMessage.fileUrl}`);
+        const { parserService } = require('../documents/parser.service');
+
+        let mimeType = 'application/pdf';
+        const urlLower = docMessage.fileUrl.toLowerCase();
+        const nameLower = (docMessage.fileName || '').toLowerCase();
+
+        if (urlLower.endsWith('.docx') || nameLower.endsWith('.docx')) {
+          mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        } else if (urlLower.endsWith('.doc') || nameLower.endsWith('.doc')) {
+          mimeType = 'application/msword';
+        } else if (urlLower.endsWith('.txt') || nameLower.endsWith('.txt')) {
+          mimeType = 'text/plain';
+        }
+
+        const parsedText = await parserService.parseDocumentToText(docMessage.fileUrl, mimeType);
+        if (parsedText && parsedText.trim()) {
+          const docName = docMessage.fileName || 'Uploaded Document';
+          documentContext = `\n\n[Attached Document Content: "${docName}"]\n${parsedText.substring(0, 20000)}\n[End of Document Content]`;
+        }
+      } catch (err: any) {
+        logger.error(`Failed to parse document attachment for AI prompt: ${err.message}`);
+      }
+    }
+
+    // Include documentContext in the final user message prompt
+    const promptWithDoc = documentContext 
+      ? (userMessage ? `${userMessage}\n${documentContext}` : `Please analyze and explain the attached document:\n${documentContext}`)
+      : (userMessage || 'Please analyze the attached document.');
+
+    // Prepend system instruction to the first message if no history yet
+    const messageToSend = rawHistory.length === 0
+      ? `${SYSTEM_INSTRUCTION}\n\n${promptWithDoc}`
+      : promptWithDoc;
+
     try {
       const modelName = options?.model || 'gemini-3.1-flash-lite';
       const provider = ProviderFactory.getProvider(modelName);
       
       const cacheKey = `ai:cache:${modelName}:${crypto.createHash('md5').update(userMessage.trim().toLowerCase()).digest('hex')}`;
 
-      if (isRedisConnected && !imageAttachment && !audioAttachment && rawHistory.length < 2) {
+      if (isRedisConnected && !imageAttachment && !audioAttachment && !documentContext && rawHistory.length < 2) {
         try {
           const cachedResponse = await redisClient.get(cacheKey);
           if (cachedResponse) {

@@ -124,4 +124,55 @@ export const documentService = {
       throw new ApiError(500, `Document processing failed: ${error.message}`);
     }
   },
+
+  /**
+   * Reviews a document for grammar, technical errors, formatting issues, fact checking, and suggestions.
+   */
+  auditDocument: async (documentId: string, userId: string) => {
+    const document = await Document.findOne({ _id: documentId, userId });
+    if (!document) {
+      throw new ApiError(404, 'Document record not found or access denied');
+    }
+
+    if (document.auditReport && document.auditReport.trim()) {
+      return { document, auditReport: document.auditReport };
+    }
+
+    logger.info(`Starting audit review for document: ${document.originalName} (${document.id})`);
+    const text = await parserService.parseDocumentToText(document.storagePath, document.fileType);
+    const truncatedText = text.substring(0, 15000);
+
+    const auditPrompt = `You are a senior document auditor and technical editor. Perform a thorough review of the following document and provide a structured audit report in clean Markdown:
+
+### 1. 📝 **Grammar, Spelling & Tone**
+Identify any spelling mistakes, grammatical issues, awkward phrasing, or inconsistent tone.
+
+### 2. ⚙️ **Technical & Structural Flaws**
+Identify incomplete arguments, missing technical details, structural gaps, or undefined terms.
+
+### 3. 📐 **Formatting & Layout Issues**
+Point out hierarchy issues, missing headers, broken list numbering, or readability problems.
+
+### 4. 🔍 **Fact Checking & Logic Verification**
+Highlight conflicting statements, doubtful numbers/claims, or internal contradictions.
+
+### 5. 💡 **Actionable Suggestions & Improvements**
+Provide 3-5 concrete recommendations to make this document professional, clear, and bulletproof.
+
+Document Text:
+${truncatedText}`;
+
+    try {
+      const { geminiService } = require('../ai/gemini.service');
+      const auditReport = await geminiService.generateResponse(auditPrompt);
+      
+      document.auditReport = auditReport;
+      await document.save();
+
+      return { document, auditReport };
+    } catch (err: any) {
+      logger.error(`Document audit failed for ${documentId}: ${err.message}`);
+      throw new ApiError(500, `Failed to audit document: ${err.message}`);
+    }
+  },
 };
