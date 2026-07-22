@@ -674,11 +674,21 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
       }
 
       let imageAttachment: any = undefined;
-      if (type === 'image' && fileUrl) {
+      const imageMsg = (type === 'image' && fileUrl)
+        ? { fileUrl, fileName }
+        : allDbMessages.find(m =>
+            m.fileUrl &&
+            (m.type === 'image' || m.fileUrl.match(/\.(png|jpg|jpeg|gif|webp)$/i))
+          );
+
+      if (imageMsg && imageMsg.fileUrl) {
         try {
-          const buffer = await downloadFileToBuffer(fileUrl);
+          logger.info(`[streamMessage] Passing image attachment to multimodal model: ${imageMsg.fileUrl}`);
+          const buffer = await downloadFileToBuffer(imageMsg.fileUrl);
+          const ext = (imageMsg.fileUrl.split('.').pop() || '').toLowerCase();
+          const mimeType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : (ext === 'webp' ? 'image/webp' : 'image/png');
           imageAttachment = {
-            mimeType: 'image/png',
+            mimeType,
             data: buffer.toString('base64'),
           };
         } catch (e: any) {
