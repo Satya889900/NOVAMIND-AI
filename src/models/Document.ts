@@ -59,6 +59,20 @@ const DocumentSchema = new Schema(
       type: [String],
       default: [],
     },
+    sourceType: {
+      type: String,
+      enum: ['pdf', 'docx', 'txt', 'youtube', 'web'],
+      default: 'pdf',
+    },
+    sourceUrl: {
+      type: String,
+      default: '',
+    },
+    metadata: {
+      title: { type: String, default: '' },
+      channel: { type: String, default: '' },
+      author: { type: String, default: '' },
+    },
     auditReport: {
       type: String,
       default: '',

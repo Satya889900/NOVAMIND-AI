@@ -70,3 +70,13 @@ export const auditDocumentController = asyncHandler(async (req: Request, res: Re
   const result = await documentService.auditDocument(req.params.id, req.user.id);
   return sendSuccess(res, 'Document audit report generated successfully', result);
 });
+
+export const createUrlDocumentController = asyncHandler(async (req: Request, res: Response) => {
+  const { url } = req.body;
+  if (!url || typeof url !== 'string' || !url.trim()) {
+    throw new ApiError(400, 'Valid URL is required');
+  }
+
+  const doc = await documentService.createDocumentFromUrl(url.trim(), req.user.id);
+  return sendSuccess(res, 'URL document added. Background transcript/web processing started...', doc, 201);
+});

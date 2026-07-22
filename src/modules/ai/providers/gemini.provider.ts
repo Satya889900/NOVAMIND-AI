@@ -4,6 +4,7 @@ import { logger } from '../../../config/logger';
 import { env } from '../../../config/env';
 import { IAiProvider, ProviderChatOptions } from './provider.interface';
 import { attemptCloudflareImageGen } from './flux.provider';
+import { cleanImagePrompt } from '../../../utils/cleanPrompt';
 import https from 'https';
 import http from 'http';
 
@@ -367,9 +368,11 @@ export class GeminiProvider implements IAiProvider {
   }
 
   async generateImage(prompt: string): Promise<Buffer> {
-    const enhancedPrompt = `${prompt.trim()}, 8k resolution, highly detailed, cinematic lighting, photorealistic, clean composition, professional digital art, masterpiece`;
+    const cleanPrompt = cleanImagePrompt(prompt);
+    const enhancedPrompt = `${cleanPrompt}, 8k resolution, highly detailed, cinematic lighting, photorealistic, clean composition, professional digital art, masterpiece`;
     const encodedPrompt = encodeURIComponent(enhancedPrompt);
-    const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true`;
+    const seed = Math.floor(Math.random() * 10000000);
+    const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}&model=flux`;
 
     const now = Date.now();
     const inCooldown = imagenQuotaResetAt > now;

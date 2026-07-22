@@ -3,6 +3,7 @@ import { env } from '../../../config/env';
 import { logger } from '../../../config/logger';
 import https from 'https';
 import http from 'http';
+import { cleanImagePrompt } from '../../../utils/cleanPrompt';
 
 const DOWNLOAD_TIMEOUT_MS = 90_000; // 90 seconds — AI image generation can take 30–60s+
 
@@ -207,7 +208,8 @@ export class BlackForestLabsProvider implements IAiProvider {
     const apiKey = env.BFL_API_KEY;
     const isMockKey = !apiKey || apiKey.includes('your_bfl') || apiKey.includes('bfl_mock') || apiKey.includes('flux_mock');
 
-    const enhancedPrompt = `${prompt.trim()}, 8k resolution, highly detailed, cinematic lighting, photorealistic, clean composition, professional digital art, masterpiece`;
+    const cleanPrompt = cleanImagePrompt(prompt);
+    const enhancedPrompt = `${cleanPrompt}, 8k resolution, highly detailed, cinematic lighting, photorealistic, clean composition, professional digital art, masterpiece`;
 
     if (isMockKey || bflKeyInvalid) {
       if (bflKeyInvalid) {
@@ -221,7 +223,8 @@ export class BlackForestLabsProvider implements IAiProvider {
         logger.warn(`Cloudflare fallback failed (${cfErr.message}). Falling back to free Pollinations.ai...`);
       }
       const encodedPrompt = encodeURIComponent(enhancedPrompt);
-      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true`;
+      const seed = Math.floor(Math.random() * 10000000);
+      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}&model=flux`;
       return await downloadFileToBuffer(imageUrl);
     }
 
@@ -280,7 +283,8 @@ export class BlackForestLabsProvider implements IAiProvider {
         logger.warn(`Cloudflare fallback failed (${cfErr.message}). Falling back to Pollinations.ai...`);
       }
       const encodedPrompt = encodeURIComponent(enhancedPrompt);
-      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true`;
+      const seed = Math.floor(Math.random() * 10000000);
+      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}&model=flux`;
       return await downloadFileToBuffer(imageUrl);
     }
   }

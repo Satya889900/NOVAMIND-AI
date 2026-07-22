@@ -592,6 +592,24 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
         ) && !m.fileUrl.match(/\.(png|jpg|jpeg|gif|webp|webm|wav|mp3|m4a)$/i)
       );
 
+      // Check if prompt contains a YouTube video link
+      if (content.includes('youtube.com') || content.includes('youtu.be')) {
+        try {
+          const { youtubeService } = require('../documents/youtube.service');
+          const ytResult = await youtubeService.getTranscript(content);
+          if (ytResult && ytResult.transcriptText) {
+            const ytContext = `[YouTube Video Content: "${ytResult.title}"]\n${ytResult.transcriptText.substring(0, 20000)}\n[End of YouTube Content]`;
+            if (ytResult.hasCaptions) {
+              promptToSend = `Below is the transcript of a YouTube video link provided by the user. Please analyze the video content, provide a clear executive summary, key takeaways, actionable suggestions, and answer any specific user questions:\n\nUser Message: ${content}\n\n${ytContext}`;
+            } else {
+              promptToSend = `The user shared a YouTube video link ("${ytResult.title}"). Closed captions/transcripts are disabled by the creator for this video. Analyze the video title and description below, explain clearly what the video is about, and politely inform the user that closed captions were disabled on YouTube for this specific video:\n\nUser Message: ${content}\n\n${ytContext}`;
+            }
+          }
+        } catch (ytErr: any) {
+          logger.warn(`Failed to extract YouTube transcript in streamMessage: ${ytErr.message}`);
+        }
+      }
+
       if (docMessage && docMessage.fileUrl) {
         try {
           logger.info(`[streamMessage] Parsing attached document for streaming context: ${docMessage.fileUrl}`);

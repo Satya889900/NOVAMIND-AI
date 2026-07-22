@@ -120,6 +120,18 @@ export const parserService = {
   parseDocumentToText: async (storagePath: string, mimeType: string): Promise<string> => {
     logger.info(`Parsing document from ${storagePath} (${mimeType})`);
     try {
+      if (mimeType === 'youtube' || storagePath.includes('youtube.com') || storagePath.includes('youtu.be')) {
+        const { youtubeService } = require('./youtube.service');
+        const res = await youtubeService.getTranscript(storagePath);
+        return res.transcriptText;
+      }
+
+      if (mimeType === 'web' || (storagePath.startsWith('http') && !storagePath.includes('res.cloudinary.com'))) {
+        const { webService } = require('./web.service');
+        const res = await webService.extractWebpageText(storagePath);
+        return res.text;
+      }
+
       // Download file from Cloudinary (with signed archive fallback if needed)
       const fileBuffer = await downloadFileFromCloudinary(storagePath);
 

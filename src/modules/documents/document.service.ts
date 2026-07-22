@@ -175,4 +175,46 @@ ${truncatedText}`;
       throw new ApiError(500, `Failed to audit document: ${err.message}`);
     }
   },
+
+  /**
+   * Create a Document record from a YouTube or Web URL and trigger background RAG processing.
+   */
+  createDocumentFromUrl: async (url: string, userId: string) => {
+    const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
+    const sourceType = isYouTube ? 'youtube' : 'web';
+    
+    let originalName = 'Web Document';
+    if (isYouTube) {
+      const { extractYouTubeVideoId } = require('./youtube.service');
+      const vid = extractYouTubeVideoId(url);
+      originalName = `YouTube Video (${vid || 'URL'})`;
+    } else {
+      try {
+        const u = new URL(url);
+        originalName = `Web: ${u.hostname}`;
+      } catch (e) {
+        originalName = 'Web Document';
+      }
+    }
+
+    const document = await Document.create({
+      userId,
+      fileName: originalName,
+      originalName,
+      fileType: sourceType,
+      fileSize: 0,
+      storagePath: url,
+      cloudinaryPublicId: `url_${Date.now()}`,
+      status: 'Uploaded',
+      sourceType,
+      sourceUrl: url,
+    });
+
+    // Run non-blocking background RAG processing
+    documentService.processDocument(document.id).catch((err: any) => {
+      logger.error(`Background processing failed for URL document ${document.id}: ${err.message}`);
+    });
+
+    return document;
+  },
 };

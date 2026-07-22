@@ -4,8 +4,9 @@ import { logger } from '../../../config/logger';
 import https from 'https';
 import http from 'http';
 import { postRequest } from './httpClient';
+import { cleanImagePrompt } from '../../../utils/cleanPrompt';
 
-const DOWNLOAD_TIMEOUT_MS = 5_000;
+const DOWNLOAD_TIMEOUT_MS = 15_000;
 
 function downloadFileToBuffer(url: string, attempt = 1): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -121,11 +122,13 @@ export class PollinationsProvider implements IAiProvider {
   }
 
   async generateImage(prompt: string): Promise<Buffer> {
-    logger.info(`Generating image via Pollinations AI for prompt: "${prompt}"...`);
-    const enhancedPrompt = `${prompt.trim()}, 8k resolution, highly detailed, photorealistic, cinematic lighting, masterpiece`;
+    const cleanPrompt = cleanImagePrompt(prompt);
+    logger.info(`Generating image via Pollinations AI for prompt: "${cleanPrompt}"...`);
+    const enhancedPrompt = `${cleanPrompt}, 8k resolution, highly detailed, photorealistic, cinematic lighting, masterpiece`;
     const encodedPrompt = encodeURIComponent(enhancedPrompt);
+    const seed = Math.floor(Math.random() * 10000000);
 
-    let url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&private=true`;
+    let url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}&model=flux`;
     if (env.POLLINATIONS_API_KEY) {
       url += `&key=${encodeURIComponent(env.POLLINATIONS_API_KEY)}`;
     }
