@@ -86,3 +86,27 @@ export const handleAiChat = asyncHandler(async (req: Request, res: Response) => 
     201
   );
 });
+
+export const handleTts = asyncHandler(async (req: Request, res: Response) => {
+  const { text, lang = 'en' } = req.body;
+  if (!text || typeof text !== 'string') {
+    throw new ApiError(400, 'Text is required for TTS generation.');
+  }
+
+  const cleanText = encodeURIComponent(
+    text
+      .replace(/[\*\_`#\-\[\]\(\)]/g, '')
+      .slice(0, 500)
+  );
+  const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${cleanText}&tl=${lang}&client=tw-ob`;
+
+  return sendSuccess(
+    res,
+    'TTS audio generated successfully',
+    {
+      audioUrl: ttsUrl,
+      text: text.slice(0, 200),
+    },
+    200
+  );
+});

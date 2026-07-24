@@ -4,11 +4,10 @@ import { logger } from './logger';
 
 // Models tried in order — if one fails (503/429/404), next one is used automatically
 const MODEL_FALLBACK_ORDER = [
-  'gemini-3.5-flash',
-  'gemini-3.6-flash',
   'gemini-2.0-flash-lite',
-  'gemma-4-26b-a4b-it',
-  'gemini-flash-latest',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash-8b',
+  'gemini-2.0-flash-exp',
 ];
 
 let aiClient: GoogleGenerativeAI | null = null;

@@ -98,7 +98,7 @@ export class GroqProvider implements IAiProvider {
     
     // Map model names
     let modelId = options?.model || 'llama-3.3-70b-versatile';
-    if (modelId === 'groq-llama' || modelId === 'llama') {
+    if (!modelId.includes('llama') && !modelId.includes('mixtral') && !modelId.includes('groq')) {
       modelId = 'llama-3.3-70b-versatile';
     }
 
@@ -169,7 +169,7 @@ export class GroqProvider implements IAiProvider {
     const maxOutputTokens = options?.maxTokens !== undefined ? options.maxTokens : 2048;
     
     let modelId = options?.model || 'llama-3.3-70b-versatile';
-    if (modelId === 'groq-llama' || modelId === 'llama') {
+    if (!modelId.includes('llama') && !modelId.includes('mixtral') && !modelId.includes('groq')) {
       modelId = 'llama-3.3-70b-versatile';
     }
 
@@ -204,7 +204,7 @@ export class GroqProvider implements IAiProvider {
 
     const req = https.request({
       hostname: 'api.groq.com',
-      path: '/v1/chat/completions',
+      path: '/openai/v1/chat/completions',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

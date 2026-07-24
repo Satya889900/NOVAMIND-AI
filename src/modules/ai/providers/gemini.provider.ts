@@ -172,6 +172,24 @@ function generateImageViaHuggingFace(prompt: string, apiKey: string): Promise<Bu
   });
 }
 
+function getModelsToTry(requestedModel?: string): string[] {
+  const models = [...MODEL_FALLBACK_ORDER];
+  if (requestedModel) {
+    let mapped = 'gemini-2.0-flash-lite';
+    if (requestedModel.includes('flash') && !requestedModel.includes('lite')) {
+      mapped = 'gemini-2.0-flash';
+    }
+    if (!models.includes(mapped)) {
+      models.unshift(mapped);
+    } else {
+      const idx = models.indexOf(mapped);
+      models.splice(idx, 1);
+      models.unshift(mapped);
+    }
+  }
+  return models;
+}
+
 export class GeminiProvider implements IAiProvider {
   name = 'gemini';
 
@@ -224,9 +242,10 @@ export class GeminiProvider implements IAiProvider {
     const finalPrompt = promptParts.length > 1 ? promptParts : prompt;
 
     const errors: string[] = [];
+    const modelsToTry = getModelsToTry(options?.model);
 
     // Fallback logic
-    for (const modelName of MODEL_FALLBACK_ORDER) {
+    for (const modelName of modelsToTry) {
       try {
         const model = (aiClient as GoogleGenerativeAI).getGenerativeModel({ model: modelName });
         let text: string;
@@ -266,6 +285,18 @@ export class GeminiProvider implements IAiProvider {
           msg.includes('ETIMEDOUT') ||      // request timed out
           msg.includes('ENOTFOUND');        // DNS failure
         if (!isRetriable) break;
+      }
+    }
+
+    // High-speed fallback to Groq if Gemini is rate limited or unavailable
+    if (env.GROQ_API_KEY && !env.GROQ_API_KEY.includes('mock') && !env.GROQ_API_KEY.includes('your_groq')) {
+      try {
+        logger.info('Gemini models rate-limited or unavailable. Automatically falling back to Groq (Llama 3.3)...');
+        const { GroqProvider } = require('./groq.provider');
+        const groq = new GroqProvider();
+        return await groq.generateResponse(prompt, options);
+      } catch (groqErr: any) {
+        logger.warn(`Groq fallback failed: ${groqErr.message}`);
       }
     }
 
@@ -320,8 +351,10 @@ export class GeminiProvider implements IAiProvider {
 
     const finalPrompt = promptParts.length > 1 ? promptParts : prompt;
 
+    const modelsToTry = getModelsToTry(options?.model);
+
     // Fallback logic for streaming
-    for (const modelName of MODEL_FALLBACK_ORDER) {
+    for (const modelName of modelsToTry) {
       try {
         const model = (aiClient as GoogleGenerativeAI).getGenerativeModel({ model: modelName });
 
@@ -349,7 +382,23 @@ export class GeminiProvider implements IAiProvider {
         return; // Success, exit generator
       } catch (err: any) {
         logger.warn(`Gemini Model ${modelName} stream failed: ${err.message || err}`);
-        if (modelName === MODEL_FALLBACK_ORDER[MODEL_FALLBACK_ORDER.length - 1]) {
+        if (modelName === modelsToTry[modelsToTry.length - 1]) {
+          // If Gemini models fail, attempt high-speed Groq streaming fallback
+          if (env.GROQ_API_KEY && !env.GROQ_API_KEY.includes('mock') && !env.GROQ_API_KEY.includes('your_groq')) {
+            try {
+              logger.info('All Gemini stream models rate-limited or unavailable. Automatically falling back to Groq Llama 3.3...');
+              const { GroqProvider } = require('./groq.provider');
+              const groq = new GroqProvider();
+              if (groq.streamResponse) {
+                for await (const chunk of groq.streamResponse(prompt, options)) {
+                  yield chunk;
+                }
+                return;
+              }
+            } catch (groqErr: any) {
+              logger.warn(`Groq stream fallback failed: ${groqErr.message}`);
+            }
+          }
           throw err;
         }
       }

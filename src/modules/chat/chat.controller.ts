@@ -577,6 +577,12 @@ export const streamMessage = asyncHandler(async (req: Request, res: Response) =>
 
       // Check FULL conversation history for any document attachment (PDF, DOCX, TXT)
       let promptToSend = content;
+
+      // Check if prompt is a live Voice Call request
+      if (content.includes('🎤') || content.includes('Voice Call') || content.includes('Voice Message')) {
+        const cleanPrompt = content.replace(/🎤\s*\[(Voice Call|Voice Message)\]:\s*/gi, '').trim();
+        promptToSend = `[System Voice Directive: You are speaking in an active live voice conversation call. Answer directly in a warm, clear, natural, human conversational tone in 2-4 concise sentences. Do NOT use markdown symbols, bold text (*), bullet points, or code blocks so your output reads naturally when spoken out loud like a real human expert.]\n\nUser Question: "${cleanPrompt}"`;
+      }
       const allDbMessages = await Message.find({ conversationId: roomId })
         .sort({ createdAt: -1 })
         .limit(50)
